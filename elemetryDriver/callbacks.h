@@ -1,0 +1,57 @@
+#pragma once
+
+// Define NTDDI_VERSION before including any Windows headers
+#ifndef NTDDI_VERSION
+#define NTDDI_VERSION 0x0A000000
+#endif
+
+// Include Common.h FIRST for shared definitions
+#include "Common.h" 
+
+// Include other necessary headers
+#include <ntdef.h>
+#include <ntddk.h>
+#include <ntstrsafe.h>
+
+// Declare extern global constants/variables defined in callbacks.cpp
+extern const ULONG g_HardcodedModuleCount; // Allow elemetryDriver.cpp to see this
+
+// --- Initialization and Cleanup --- 
+NTSTATUS InitializeCallbackTracking();
+VOID CleanupCallbackTracking();
+
+// --- Module Operations ---
+NTSTATUS GetHardcodedModules(
+    _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
+    _In_ ULONG OutputBufferLength,
+    _Out_ PULONG BytesWrittenOrRequired
+);
+
+// New function to get system modules similar to TelemetrySourcerer
+NTSTATUS GetSystemModules(
+    _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
+    _In_ ULONG OutputBufferLength,
+    _Out_ PULONG BytesWrittenOrRequired
+);
+
+// --- IOCTL Handlers ---
+NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+
+// --- Callback Enumeration ---
+NTSTATUS EnumerateCallbacks(
+    _In_ PENUM_CALLBACKS_CALLBACK EnumCallback,
+    _In_opt_ PVOID Context
+);
+
+// --- Callback Management ---
+NTSTATUS RegisterCallback(PCALLBACK_INFO_SHARED CallbackInfo);
+ULONG GetCallbackCount();
+NTSTATUS GetCallbackByIndex(_In_ ULONG Index, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
+NTSTATUS GetCallbackByName(_In_ PCSTR CallbackName, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
+NTSTATUS GetCallbackByAddress(_In_ PVOID CallbackAddress, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
+
+// Forward declaration of DriverUnload function
+VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
+
+// NO #endif here unless there was a matching #ifdef earlier 
