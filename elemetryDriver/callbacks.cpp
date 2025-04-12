@@ -65,22 +65,27 @@ ZwQuerySystemInformation(
 CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
 ULONG g_CallbackCount = 0;
 
-// Target module names to look for
-static const WCHAR* g_TargetModules[] = {
-    L"\\SystemRoot\\system32\\ntoskrnl.exe",
-    L"\\SystemRoot\\system32\\hal.dll",
-    L"\\SystemRoot\\System32\\drivers\\Wdf01000.sys",
-    L"\\SystemRoot\\System32\\drivers\\ACPI.sys"
-};
-const ULONG g_HardcodedModuleCount = sizeof(g_TargetModules) / sizeof(g_TargetModules[0]);
-static const ULONG g_HardcodedModulesRequiredSize = g_HardcodedModuleCount * sizeof(MODULE_INFO);
+// Define the number of hardcoded modules we are looking for
+const ULONG g_HardcodedModuleCount = 16; // Updated count
 
-// Define hardcoded module information
-static MODULE_INFO g_HardcodedModules[] = {
-    { NULL, 0, 0, L"\\SystemRoot\\system32\\ntoskrnl.exe" },
-    { NULL, 0, 0, L"\\SystemRoot\\system32\\hal.dll" },
-    { NULL, 0, 0, L"\\SystemRoot\\System32\\drivers\\Wdf01000.sys" },
-    { NULL, 0, 0, L"\\SystemRoot\\System32\\drivers\\ACPI.sys" }
+// Define the list of hardcoded module names to search for
+static const WCHAR* g_HardcodedModules[g_HardcodedModuleCount] = {
+    L"ntoskrnl.exe",
+    L"ksecdd.sys",
+    L"cng.sys",
+    L"tcpip.sys",
+    L"dxgkrnl.sys",
+    L"peauth.sys",
+    L"iorate.sys",
+    L"mmcss.sys",
+    L"ahcache.sys",
+    L"CI.dll",
+    L"luafv.sys",
+    L"npsvctrig.sys",
+    L"Wof.sys",
+    L"fileinfo.sys",
+    L"wcifs.sys",
+    L"bindflt.sys"
 };
 
 // Define static buffers
@@ -178,8 +183,9 @@ NTSTATUS GetHardcodedModules(
     _Out_ PULONG BytesWrittenOrRequired
 )
 {
-    NTSTATUS Status = STATUS_SUCCESS;
-    *BytesWrittenOrRequired = 0;
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG requiredSize = g_HardcodedModuleCount * sizeof(MODULE_INFO);
+    ULONG foundCount = 0;
 
     // Check if we're at PASSIVE_LEVEL
     KIRQL CurrentIrql = KeGetCurrentIrql();
@@ -188,10 +194,10 @@ NTSTATUS GetHardcodedModules(
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    if (OutputBufferLength < g_HardcodedModulesRequiredSize) {
+    if (OutputBufferLength < requiredSize) {
         DbgPrint("[elemetry] GetHardcodedModules: Buffer too small. Required: %u, Provided: %u\n", 
-                 g_HardcodedModulesRequiredSize, OutputBufferLength);
-        *BytesWrittenOrRequired = g_HardcodedModulesRequiredSize;
+                 requiredSize, OutputBufferLength);
+        *BytesWrittenOrRequired = requiredSize;
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -200,7 +206,8 @@ NTSTATUS GetHardcodedModules(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DbgPrint("[elemetry] GetHardcodedModules: Looking for %u target modules\n", g_HardcodedModuleCount);
+    // Report how many target modules we are looking for
+    DbgPrint("[elemetry] GetHardcodedModules: Looking for %lu target modules\n", g_HardcodedModuleCount);
 
     __try {
         // Use our static buffer for system module information
@@ -214,34 +221,35 @@ NTSTATUS GetHardcodedModules(
             return STATUS_INVALID_DEVICE_STATE;
         }
 
-        Status = ZwQuerySystemInformation(SystemModuleInformation, g_SystemModuleBuffer, SystemInfoLength, &SystemInfoLength);
-        if (!NT_SUCCESS(Status)) {
-            DbgPrint("[elemetry] GetHardcodedModules: Failed to get module information: 0x%X\n", Status);
-            return Status;
+        status = ZwQuerySystemInformation(SystemModuleInformation, g_SystemModuleBuffer, SystemInfoLength, &SystemInfoLength);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] GetHardcodedModules: Failed to get module information: 0x%X\n", status);
+            return status;
         }
 
         // Process modules from static buffer
         PSYSTEM_MODULE_INFORMATION ModuleInfo = (PSYSTEM_MODULE_INFORMATION)g_SystemModuleBuffer;
-        ULONG ModulesFound = 0;
 
-        for (ULONG i = 0; i < g_HardcodedModuleCount; i++) {
-            if (FindModuleByName(ModuleInfo->Modules, ModuleInfo->Count, g_TargetModules[i], &OutputBuffer[i])) {
-                DbgPrint("[elemetry] GetHardcodedModules: Found module %ls at %p\n", 
-                         g_TargetModules[i], OutputBuffer[i].BaseAddress);
-                ModulesFound++;
+        // Iterate through the target module names
+        for (ULONG targetIndex = 0; targetIndex < g_HardcodedModuleCount; ++targetIndex) {
+            // Compare the current module's name (lowercase) with the target name (lowercase)
+            if (FindModuleByName(ModuleInfo->Modules, ModuleInfo->Count, g_HardcodedModules[targetIndex], &OutputBuffer[targetIndex])) {
+                DbgPrint("[elemetry] GetHardcodedModules: Found module %S at %p\n", 
+                         g_HardcodedModules[targetIndex], OutputBuffer[targetIndex].BaseAddress);
+                foundCount++;
             } else {
-                DbgPrint("[elemetry] GetHardcodedModules: Module %ls not found\n", g_TargetModules[i]);
-                OutputBuffer[i].BaseAddress = NULL;
-                OutputBuffer[i].Size = 0;
-                OutputBuffer[i].Flags = 0;
-                wcscpy_s(OutputBuffer[i].Path, MAX_PATH, g_TargetModules[i]);
+                DbgPrint("[elemetry] GetHardcodedModules: Module %S not found\n", g_HardcodedModules[targetIndex]);
+                OutputBuffer[targetIndex].BaseAddress = NULL;
+                OutputBuffer[targetIndex].Size = 0;
+                OutputBuffer[targetIndex].Flags = 0;
+                wcscpy_s(OutputBuffer[targetIndex].Path, MAX_PATH, g_HardcodedModules[targetIndex]);
             }
         }
 
-        DbgPrint("[elemetry] GetHardcodedModules: Found %u of %u target modules\n", 
-                 ModulesFound, g_HardcodedModuleCount);
+        // Report how many were found
+        DbgPrint("[elemetry] GetHardcodedModules: Found %lu of %lu target modules\n", foundCount, g_HardcodedModuleCount);
 
-        *BytesWrittenOrRequired = g_HardcodedModulesRequiredSize;
+        *BytesWrittenOrRequired = foundCount * sizeof(MODULE_INFO);
         return STATUS_SUCCESS;
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {

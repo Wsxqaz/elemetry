@@ -23,8 +23,10 @@
 // Global variables
 PDEVICE_OBJECT g_DeviceObject = NULL;
 
-// Static buffer for modules (2144 bytes as reported by GetHardcodedModules)
-#define MODULE_BUFFER_SIZE 2144
+// Static buffer for modules (needs space for 16 modules)
+// MODULE_INFO size is roughly 528 bytes (PVOID + 2*ULONG + WCHAR[260])
+// 16 * 528 = 8448 bytes
+#define MODULE_BUFFER_SIZE 8448 // Increased size
 static UCHAR g_ModuleBuffer[MODULE_BUFFER_SIZE];
 
 // Forward Declarations for Dispatch Routines
