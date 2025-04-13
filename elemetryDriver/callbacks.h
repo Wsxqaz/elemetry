@@ -37,11 +37,39 @@ NTSTATUS GetSystemModules(
 // --- IOCTL Handlers ---
 NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+NTSTATUS HandleReadKernelMemoryIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+
+// --- PE Parsing Helper ---
+NTSTATUS ParseModuleExports(_Inout_ PPE_PARSE_CONTEXT ParseContext);
 
 // --- Callback Enumeration ---
 NTSTATUS EnumerateCallbacks(
     _In_ PENUM_CALLBACKS_CALLBACK EnumCallback,
     _In_opt_ PVOID Context
+);
+
+// --- Kernel Memory Operations ---
+NTSTATUS ReadKernelMemory(
+    _In_ PVOID KernelAddress,
+    _Out_writes_bytes_(Size) PVOID UserBuffer,
+    _In_ SIZE_T Size,
+    _Out_ PSIZE_T BytesRead
+);
+
+// --- Callback Enumeration Functions ---
+NTSTATUS EnumerateLoadImageCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+);
+
+NTSTATUS EnumerateCreateProcessCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
 );
 
 // --- Callback Management ---

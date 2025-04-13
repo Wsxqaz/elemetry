@@ -1,105 +1,124 @@
-# Elemetry Client
+# Elemetry Client Application
 
-A user-mode application to interact with the elemetryDriver kernel driver. This client application sends IOCTLs to trigger module enumeration and view system callbacks registered in the kernel.
-
-## Prerequisites
-
-- Visual Studio 2019 or later
-- Windows 10 SDK
-- Administrative privileges (to load and interact with the driver)
-
-## Build Instructions
-
-### Using Visual Studio Solution (Recommended)
-
-1. Open `elemetryClient.sln` in Visual Studio
-2. Select the desired configuration (Debug/Release) and platform (x64/Win32)
-3. Build the solution using `Build > Build Solution` or press F7
-4. The output will be in the `bin\$(Platform)\$(Configuration)\` directory
-
-### Using CMake
-
-1. Create a build directory:
-   ```
-   mkdir build
-   cd build
-   ```
-
-2. Generate build files:
-   ```
-   cmake ..
-   ```
-
-3. Build the application:
-   ```
-   cmake --build . --config Release
-   ```
-
-## Installing and Loading the Driver
-
-Before running the client, you need to install and load the elemetryDriver:
-
-### Using the Driver Build Scripts
-
-1. Navigate to the `elemetryDriver` directory
-2. Run `build_and_sign.bat` to build and sign the driver
-3. Install the driver manually or using:
-   ```
-   sc create elemetryDriver type= kernel binPath= "path\to\elemetryDriver.sys"
-   sc start elemetryDriver
-   ```
-
-### Manual Driver Installation
-
-1. Build the elemetryDriver project in Visual Studio
-2. Open an elevated Command Prompt
-3. Use the following commands to install and start the driver:
-   ```
-   sc create elemetryDriver type= kernel binPath= "full\path\to\elemetryDriver.sys"
-   sc start elemetryDriver
-   ```
-4. To stop and remove the driver:
-   ```
-   sc stop elemetryDriver
-   sc delete elemetryDriver
-   ```
-
-## Running the Application
-
-1. Ensure the elemetryDriver is installed and running (see instructions above)
-2. Run the client application with administrative privileges:
-   - If using Visual Studio: Right-click on the project and select "Run as Administrator" (this is configured in the project settings)
-   - If running manually: 
-     ```
-     RunAs /user:administrator elemetryClient.exe
-     ```
+The Elemetry Client is a Windows application that communicates with the Elemetry Driver to enumerate kernel modules and callback routines.
 
 ## Features
 
-- Retrieves module information from the kernel driver
-- Retrieves registered callback information 
-- Displays information in a readable format
+- Enumerate kernel modules loaded in the system
+- Enumerate kernel callbacks (Load Image, Process Creation)
+- Find and display detailed information about kernel callbacks
+- Support for symbol resolution through Microsoft Symbol Server
 
-## Project Structure
+## Building the Application
 
-- `elemetryClient.cpp` - Main application source code
-- `elemetry.h` - Common definitions shared with the driver
-- `elemetryClient.vcxproj` - Visual Studio project file
-- `elemetryClient.sln` - Visual Studio solution file
-- `CMakeLists.txt` - CMake build configuration
+### Prerequisites
+
+- Visual Studio 2019 or 2022 with C++ Desktop Development workload
+- Windows SDK 10.0.19041.0 or newer
+- Windows Driver Kit (optional, for driver development)
+- Debugging Tools for Windows (part of the Windows SDK)
+
+### Build Steps
+
+1. Open a Developer Command Prompt for Visual Studio
+2. Navigate to the elemetryClient directory
+3. Run the build script:
+
+```
+build.bat
+```
+
+The build script will:
+- Find your Visual Studio installation
+- Build the application for x64 Debug by default
+- Copy necessary debug DLLs like symsrv.dll to the output directory
+- Create a symbol cache directory if needed
+
+### Build Configuration
+
+You can specify the platform and configuration as arguments:
+
+```
+build.bat [Platform] [Configuration]
+```
+
+Example:
+```
+build.bat x64 Release
+```
+
+## Running the Application
+
+After building, run the application using:
+
+```
+run.bat
+```
+
+Make sure the Elemetry Driver is loaded before running the client application.
+
+## Symbol Loading
+
+The application attempts to use Microsoft Symbol Server to resolve kernel symbols for accurate callback information:
+
+### Symbol Requirements
+
+For proper symbol resolution, the application needs:
+
+1. **Symbol Server DLLs**: 
+   - symsrv.dll
+   - dbghelp.dll
+   - symstore.dll
+   - dbgcore.dll
+
+2. **Symbol Cache Directory**:
+   - The application uses C:\Symbols as a cache for downloaded symbols
+   - This directory is created automatically during build
+
+### Symbol Troubleshooting
+
+If the application can't load symbols:
+
+1. **Check Output Directory**:
+   - Verify that symsrv.dll and other debugging DLLs are present in the output directory
+   - Run copy_debug_dlls.bat manually if needed
+
+2. **Internet Connection**:
+   - Symbol downloading requires internet access to https://msdl.microsoft.com
+   - Check corporate firewall settings that might block symbol server access
+
+3. **Manual Symbol Download**:
+   - If automatic download fails, you can manually download symbols using symchk:
+     ```
+     symchk /r C:\Windows\System32\ntoskrnl.exe /s SRV*C:\Symbols*https://msdl.microsoft.com/download/symbols
+     ```
+
+4. **Fallback Mechanism**:
+   - If symbols can't be loaded, the application will fall back to using hardcoded offsets
+   - This provides functionality even without symbols, but may be less accurate
 
 ## Troubleshooting
 
-If you encounter "Access Denied" errors:
-- Make sure you're running as Administrator
-- Verify that the elemetryDriver service is running
-- Check Windows Event Viewer for driver-related errors
+### Common Issues
 
-If you encounter "Failed to open device handle. Error code: 2":
-- Make sure the driver is loaded and running
-- Check that the symbolic link `\\.\elemetry` is created by the driver
-- Use `sc query elemetryDriver` to verify the driver's status
+1. **Error: Failed to open driver handle**
+   - Make sure the Elemetry Driver is loaded and running
+   - Verify you have Administrator privileges
+
+2. **Error: symsrv.dll load failure**
+   - The symbol server DLL couldn't be loaded
+   - Run copy_debug_dlls.bat script to fix this issue
+
+3. **Symbol lookup failures**
+   - Verify internet connectivity to Microsoft Symbol Server
+   - Check that C:\Symbols directory exists and is writable
+   - Ensure Windows SDK is properly installed with Debugging Tools
 
 ## License
 
-This project is licensed under the same terms as the parent project. 
+This project is available for educational purposes only.
+
+## Acknowledgements
+
+- Windows Kernel Programming by Pavel Yosifovich
+- Windows Internals, 7th Edition 

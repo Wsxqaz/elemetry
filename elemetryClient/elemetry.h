@@ -7,6 +7,8 @@
 #define IOCTL_GET_CALLBACKS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_SUPPRESS_CALLBACK CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_REVERT_CALLBACK CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_READ_KERNEL_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_ENUM_CALLBACKS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Maximum number of modules and callbacks
 #define MAX_MODULES 64
@@ -19,14 +21,14 @@
 enum class CALLBACK_TYPE
 {
     Unknown = 0,
-    PsLoadImage,
-    PsProcessCreation,
-    PsThreadCreation,
-    CmRegistry,
-    ObProcessHandlePre,
-    ObProcessHandlePost,
-    ObThreadHandlePre,
-    ObThreadHandlePost
+    PsLoadImage = 1,
+    PsProcessCreation = 2,
+    PsThreadCreation = 3,
+    CmRegistry = 4,
+    ObProcessHandlePre = 5,
+    ObProcessHandlePost = 6,
+    ObThreadHandlePre = 7,
+    ObThreadHandlePost = 8
     // Add more as needed
 };
 
@@ -68,4 +70,29 @@ typedef struct _CALLBACK_ENTRY_UI
     CHAR Name[MAX_CALLBACK_NAME];
     CHAR ModuleName[MAX_MODULE_NAME];
     BOOLEAN Suppressed;
-} CALLBACK_ENTRY_UI, *PCALLBACK_ENTRY_UI; 
+} CALLBACK_ENTRY_UI, *PCALLBACK_ENTRY_UI;
+
+// Define structures for kernel memory reading operations
+typedef struct _KERNEL_READ_REQUEST {
+    PVOID Address;       // Kernel address to read from
+    PVOID Buffer;        // Output buffer (usermode)
+    SIZE_T Size;         // Size to read
+    SIZE_T BytesRead;    // Bytes actually read
+} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+
+// Define structures for callback enumeration
+typedef enum _CALLBACK_TABLE_TYPE {
+    CallbackTableLoadImage = 0,
+    CallbackTableCreateProcess,
+    CallbackTableCreateThread,
+    CallbackTableRegistry,
+    CallbackTableMax
+} CALLBACK_TABLE_TYPE;
+
+typedef struct _CALLBACK_ENUM_REQUEST {
+    CALLBACK_TABLE_TYPE Type;         // Type of callback to enumerate
+    PVOID TableAddress;               // Supplied by usermode from symbols
+    ULONG MaxCallbacks;               // Max callbacks to retrieve
+    ULONG FoundCallbacks;             // Number of callbacks found
+    CALLBACK_INFO_SHARED Callbacks[1]; // Variable-sized array
+} CALLBACK_ENUM_REQUEST, *PCALLBACK_ENUM_REQUEST; 

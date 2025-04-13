@@ -95,6 +95,14 @@ NTSTATUS DispatchDeviceControl(
             status = HandleEnumerateCallbacksIOCTL(Irp, stack);
             break;
             
+        case IOCTL_READ_KERNEL_MEMORY:
+            status = HandleReadKernelMemoryIOCTL(Irp, stack);
+            break;
+            
+        case IOCTL_ENUM_CALLBACKS:
+            status = HandleEnumCallbacksIOCTL(Irp, stack);
+            break;
+            
         default:
             DbgPrint("[elemetry] Unknown IOCTL code: 0x%X\n", controlCode);
             Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
@@ -120,6 +128,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     if (CurrentIrql > PASSIVE_LEVEL) {
         DbgPrint("[elemetry] DriverEntry: Running at IRQL %d, need PASSIVE_LEVEL\n", CurrentIrql);
         return STATUS_INVALID_DEVICE_STATE;
+    }
+    
+    // Initialize system module information early
+    ULONG bytesWritten = 0;
+    NTSTATUS moduleStatus = GetHardcodedModules(NULL, 0, &bytesWritten); // Call to populate internal g_FoundModules
+    if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) {
+        DbgPrint("[elemetry] DriverEntry: Failed to pre-initialize modules: 0x%X\n", moduleStatus);
+        // Proceed anyway, InitializeCallbackTracking will handle NULL bases
+    } else {
+        DbgPrint("[elemetry] DriverEntry: Pre-initialized module information.\n");
     }
     
     // Set up driver unload routine
