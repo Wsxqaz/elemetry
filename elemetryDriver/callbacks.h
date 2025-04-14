@@ -56,6 +56,14 @@ NTSTATUS ReadKernelMemory(
     _Out_ PSIZE_T BytesRead
 );
 
+// Protected read helper
+NTSTATUS ReadProtectedKernelMemory(
+    _In_ PVOID KernelAddress,
+    _Out_writes_bytes_(Size) PVOID OutputBuffer,
+    _In_ SIZE_T Size,
+    _Out_ PSIZE_T BytesRead
+);
+
 // --- Callback Enumeration Functions ---
 NTSTATUS EnumerateLoadImageCallbacks(
     _In_opt_ PVOID CallbackTable,
@@ -65,6 +73,20 @@ NTSTATUS EnumerateLoadImageCallbacks(
 );
 
 NTSTATUS EnumerateCreateProcessCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+);
+
+NTSTATUS EnumerateCreateThreadCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+);
+
+NTSTATUS EnumerateRegistryCallbacks(
     _In_opt_ PVOID CallbackTable,
     _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
     _In_ ULONG MaxCallbacks,

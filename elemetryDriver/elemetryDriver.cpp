@@ -33,6 +33,7 @@ static UCHAR g_ModuleBuffer[MODULE_BUFFER_SIZE];
 DRIVER_DISPATCH DispatchCreateClose;
 DRIVER_DISPATCH DispatchDeviceControl;
 DRIVER_UNLOAD DriverUnload;
+DRIVER_CANCEL CancelDispatchRoutine;
 
 // Callback function for enumeration
 NTSTATUS EnumCallbackHandler(
@@ -70,6 +71,33 @@ NTSTATUS DispatchCreateClose(
     return STATUS_SUCCESS;
 }
 
+// Cancel routine for IRPs
+VOID CancelDispatchRoutine(
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    // Get the current stack location
+    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
+    ULONG ioControlCode = irpStack->Parameters.DeviceIoControl.IoControlCode;
+
+    DbgPrint("[elemetry] CancelDispatchRoutine: Cancelling IRP %p with IOCTL 0x%X\n", Irp, ioControlCode);
+
+    // Release the cancel spin lock (acquired by the I/O manager before calling)
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+    // Mark the IRP as cancelled
+    Irp->IoStatus.Status = STATUS_CANCELLED;
+    Irp->IoStatus.Information = 0;
+
+    // Complete the IRP
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    DbgPrint("[elemetry] CancelDispatchRoutine: IRP completed with STATUS_CANCELLED\n");
+}
+
 // DispatchDeviceControl Routine
 NTSTATUS DispatchDeviceControl(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -82,6 +110,38 @@ NTSTATUS DispatchDeviceControl(
     ULONG controlCode = stack->Parameters.DeviceIoControl.IoControlCode;
 
     DbgPrint("[elemetry] DispatchDeviceControl called with code 0x%X\n", controlCode);
+
+    // Check if IRP has been cancelled
+    if (Irp->Cancel) {
+        DbgPrint("[elemetry] IRP was cancelled\n");
+        Irp->IoStatus.Status = STATUS_CANCELLED;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_CANCELLED;
+    }
+
+    // For registry callback operations, set a cancel routine in case operation takes time
+    if (controlCode == IOCTL_ENUM_CALLBACKS) {
+        PCALLBACK_ENUM_REQUEST request = (PCALLBACK_ENUM_REQUEST)Irp->AssociatedIrp.SystemBuffer;
+        if (request && request->Type == CallbackTableRegistry) {
+            // Register a cancel routine
+            KIRQL oldIrql;
+            IoAcquireCancelSpinLock(&oldIrql);
+            if (Irp->Cancel) {
+                // Already cancelled between our check and acquiring the lock
+                IoReleaseCancelSpinLock(oldIrql);
+                Irp->IoStatus.Status = STATUS_CANCELLED;
+                Irp->IoStatus.Information = 0;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return STATUS_CANCELLED;
+            }
+            
+            IoSetCancelRoutine(Irp, CancelDispatchRoutine);
+            IoReleaseCancelSpinLock(oldIrql);
+            
+            DbgPrint("[elemetry] Set cancel routine for registry callback enumeration\n");
+        }
+    }
 
     NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
 
@@ -105,6 +165,18 @@ NTSTATUS DispatchDeviceControl(
             Irp->IoStatus.Information = 0;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             status = STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    // For registry callback operations, we manually ensure any cancel routine is cleared
+    // without relying on the IoGetCancelRoutine API which is missing in some WDK versions
+    if (controlCode == IOCTL_ENUM_CALLBACKS) {
+        // Acquire the cancel spin lock and reset the cancel routine directly
+        KIRQL oldIrql;
+        IoAcquireCancelSpinLock(&oldIrql);
+        // Set the cancel routine to NULL (safer than checking it first)
+        IoSetCancelRoutine(Irp, NULL);
+        IoReleaseCancelSpinLock(oldIrql);
+        DbgPrint("[elemetry] Cleared cancel routine after registry callback enumeration\n");
     }
 
     return status;
@@ -195,19 +267,32 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
     UNREFERENCED_PARAMETER(DriverObject);
     DbgPrint("[elemetry] Driver unloading...\n");
 
+    // Wait a moment to allow any pending operations to complete
+    LARGE_INTEGER delay;
+    delay.QuadPart = -10 * 1000 * 1000; // 1 second in 100ns units (negative for relative time)
+    KeDelayExecutionThread(KernelMode, FALSE, &delay);
+
     // Delete symbolic link
     UNICODE_STRING symbolicLinkName;
     RtlInitUnicodeString(&symbolicLinkName, SYMBOLIC_LINK_NAME);
     IoDeleteSymbolicLink(&symbolicLinkName);
+    DbgPrint("[elemetry] Symbolic link deleted\n");
 
     // Delete device object
     if (g_DeviceObject) {
         IoDeleteDevice(g_DeviceObject);
         g_DeviceObject = NULL;
+        DbgPrint("[elemetry] Device object deleted\n");
     }
 
     // Clean up callback tracking
     CleanupCallbackTracking();
+    DbgPrint("[elemetry] Callback tracking cleaned up\n");
 
+    // Clear global static buffers
+    RtlZeroMemory(g_ModuleBuffer, MODULE_BUFFER_SIZE);
+    DbgPrint("[elemetry] Global buffers cleared\n");
+
+    // Final cleanup complete message
     DbgPrint("[elemetry] Driver unloaded successfully.\n");
 }
