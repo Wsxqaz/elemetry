@@ -6,7 +6,7 @@
 #endif
 
 // Include Common.h FIRST for shared definitions
-#include "Common.h" 
+#include "Common.h"
 
 // Include other necessary headers
 #include <ntdef.h>
@@ -16,7 +16,7 @@
 // Declare extern global constants/variables defined in callbacks.cpp
 extern const ULONG g_HardcodedModuleCount; // Allow elemetryDriver.cpp to see this
 
-// --- Initialization and Cleanup --- 
+// --- Initialization and Cleanup ---
 NTSTATUS InitializeCallbackTracking();
 VOID CleanupCallbackTracking();
 
@@ -37,7 +37,6 @@ NTSTATUS GetSystemModules(
 // --- IOCTL Handlers ---
 NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
-NTSTATUS HandleReadKernelMemoryIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 
 // --- PE Parsing Helper ---
@@ -82,4 +81,4 @@ NTSTATUS GetCallbackByAddress(_In_ PVOID CallbackAddress, _Out_ PCALLBACK_INFO_S
 // Forward declaration of DriverUnload function
 VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject);
 
-// NO #endif here unless there was a matching #ifdef earlier 
+// NO #endif here unless there was a matching #ifdef earlier

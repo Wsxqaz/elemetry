@@ -32,7 +32,6 @@ std::string wstring_to_string(const std::wstring& wstr) {
 // Constants
 const char* DRIVER_NAME = "\\\\.\\Elemetry"; // NT device path for our driver
 const char* DEFAULT_SYMBOL_PATH = "srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols";
-const ULONG MAX_CALLBACKS_SHARED = 64; // Maximum number of callbacks to retrieve
 
 // Primary symbol names for callback tables
 const char* SYMBOL_LOAD_IMAGE_CALLBACKS = "PspLoadImageNotifyRoutine";
@@ -1013,10 +1012,10 @@ bool LoadKernelModuleSymbols(HANDLE deviceHandle) {
 }
 
 // Function to let the user select a module and dump its symbols to a file
-void DumpAllSymbolsToFile(HANDLE deviceHandle) {
+bool DumpAllSymbolsToFile(HANDLE deviceHandle) {
     if (deviceHandle == INVALID_HANDLE_VALUE) {
         std::cerr << "Invalid device handle." << std::endl;
-        return;
+        return false;
     }
 
     // Get list of modules
@@ -1036,14 +1035,14 @@ void DumpAllSymbolsToFile(HANDLE deviceHandle) {
 
     if (!success) {
         std::cerr << "Failed to get modules. Error code: " << GetLastError() << std::endl;
-        return;
+        return false;
     }
 
     DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
 
     if (moduleCount == 0) {
         std::cerr << "No modules found." << std::endl;
-        return;
+        return false;
     }
 
     std::cout << "\n=== Available Kernel Modules ===\n" << std::endl;
@@ -1059,7 +1058,7 @@ void DumpAllSymbolsToFile(HANDLE deviceHandle) {
         
         if (selection == -1) {
             std::cout << "Symbol dump canceled." << std::endl;
-            return;
+            return false;
         }
     } while (selection >= moduleCount);
 
@@ -1087,21 +1086,56 @@ void DumpAllSymbolsToFile(HANDLE deviceHandle) {
     } else {
         std::cerr << "Symbol dump failed." << std::endl;
     }
+
+    return true;
 }
 
-// Helper function to dump symbols for a specific module
+// Function to dump symbols for a specific module
 bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, const char* outputFilename) {
     if (deviceHandle == INVALID_HANDLE_VALUE) {
         return false;
     }
     
-    // Initialize symbols
+    // Initialize symbols with verbose debugging enabled
     HANDLE hProcess = GetCurrentProcess();
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
     
-    if (!SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
-        std::cerr << "Failed to initialize symbols. Error code: " << GetLastError() << std::endl;
-        return false;
+    // Configure symbol options for better debugging
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG | SYMOPT_LOAD_LINES | 
+                 SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_EXACT_SYMBOLS | SYMOPT_DEBUG);
+    
+    // Create multiple symbol paths to increase chance of finding symbols
+    std::string symbolPath = "srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols";
+    
+    // Make sure the symbols directory exists
+    CreateDirectoryA("C:\\Symbols", NULL);
+    std::cout << "Symbol directory created/verified at C:\\Symbols" << std::endl;
+    
+    // Also create a local PDB directory for manual PDB placement
+    CreateDirectoryA("LocalPDBs", NULL);
+    std::cout << "Local PDB directory created/verified at LocalPDBs" << std::endl;
+    
+    // Create a more comprehensive symbol path that includes local paths
+    symbolPath = std::string("srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols;") + 
+                 "C:\\Symbols;" + 
+                 ".\\LocalPDBs;" + 
+                 ".\\SymCache";
+    
+    std::cout << "Using comprehensive symbol path: " << symbolPath << std::endl;
+    
+    // Ensure symbol handler is not initialized already
+    SymCleanup(hProcess);
+    
+    if (!SymInitialize(hProcess, symbolPath.c_str(), FALSE)) {
+        DWORD error = GetLastError();
+        std::cerr << "Failed to initialize symbols. Error code: " << error << std::endl;
+        
+        // Try again with NULL path as fallback
+        std::cout << "Retrying with default symbol path..." << std::endl;
+        SymCleanup(hProcess); // Make sure it's cleaned up before retrying
+        if (!SymInitialize(hProcess, NULL, FALSE)) {
+            std::cerr << "Failed with default path too. Error: " << GetLastError() << std::endl;
+            return false;
+        }
     }
     
     // Get list of modules
@@ -1144,7 +1178,7 @@ bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, con
             moduleSize = moduleInfos[i].Size;
             moduleFound = true;
             std::wcout << L"Found module " << moduleName << L" at address: 0x" << std::hex << moduleBase 
-                       << std::dec << L" with size: " << moduleSize << std::endl;
+                      << std::dec << L" with size: " << moduleSize << std::endl;
             break;
         }
     }
@@ -1165,20 +1199,7 @@ bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, con
     char ansiModuleName[MAX_PATH] = {0};
     WideCharToMultiByte(CP_ACP, 0, fileName.c_str(), -1, ansiModuleName, MAX_PATH, NULL, NULL);
     
-    // Load module symbols
-    std::cout << "Loading symbols for " << ansiModuleName << "..." << std::endl;
-    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, ansiModuleName, NULL, (DWORD64)moduleBase, moduleSize, NULL, 0);
-    
-    if (baseAddr == 0 && GetLastError() != ERROR_SUCCESS) {
-        DWORD error = GetLastError();
-        std::cerr << "Failed to load symbols for " << ansiModuleName << ". Error code: " << error << std::endl;
-        SymCleanup(hProcess);
-        return false;
-    }
-    
-    std::cout << "Successfully loaded symbols at base: 0x" << std::hex << baseAddr << std::dec << std::endl;
-    
-    // Open the output file
+    // Open the output file early so we can log the process
     std::ofstream outputFile(outputFilename);
     if (!outputFile.is_open()) {
         std::cerr << "Failed to create output file: " << outputFilename << std::endl;
@@ -1192,9 +1213,307 @@ bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, con
     outputFile << "Timestamp: " << ctime(&now) << std::endl;
     outputFile << "Module Base: 0x" << std::hex << moduleBase << std::dec << std::endl;
     outputFile << "Module Size: " << moduleSize << " bytes" << std::endl;
-    outputFile << std::endl;
+    outputFile << "\n--- Symbol Loading Diagnostic Log ---" << std::endl;
     
-    // Enumerate symbols
+    // Load module symbols with comprehensive debug logging
+    std::cout << "Loading symbols for " << ansiModuleName << "..." << std::endl;
+    outputFile << "Loading symbols for " << ansiModuleName << "..." << std::endl;
+    
+    // First try to reload all symbols - this can help with stubborn symbol loading
+    std::cout << "Refreshing module list..." << std::endl;
+    outputFile << "Refreshing module list..." << std::endl;
+    SymRefreshModuleList(hProcess);
+    
+    // Force unload any previously loaded symbols for this module
+    std::cout << "Unloading any previous symbols..." << std::endl;
+    outputFile << "Unloading any previous symbols..." << std::endl;
+    SymUnloadModule64(hProcess, (DWORD64)moduleBase);
+    
+    // Load timestamps for version checking
+    std::cout << "Checking module timestamp and checksum..." << std::endl;
+    outputFile << "Checking module timestamp and checksum..." << std::endl;
+    
+    // Let's examine the module headers directly
+    ULONG headerSize = 0;
+    IMAGE_NT_HEADERS64 ntHeaders = {0};
+    
+    // Read the DOS header to find the NT headers
+    IMAGE_DOS_HEADER dosHeader = {0};
+    SIZE_T bytesRead = 0;
+    
+    if (ReadKernelMemory(deviceHandle, moduleBase, &dosHeader, sizeof(dosHeader), &bytesRead)) {
+        if (dosHeader.e_magic == IMAGE_DOS_SIGNATURE) {
+            PVOID ntHeadersAddr = (PVOID)((ULONG_PTR)moduleBase + dosHeader.e_lfanew);
+            
+            if (ReadKernelMemory(deviceHandle, ntHeadersAddr, &ntHeaders, sizeof(ntHeaders), &bytesRead)) {
+                if (ntHeaders.Signature == IMAGE_NT_SIGNATURE) {
+                    std::cout << "NT Headers found. Timestamp: 0x" << std::hex << ntHeaders.FileHeader.TimeDateStamp << std::dec << std::endl;
+                    outputFile << "NT Headers found. Timestamp: 0x" << std::hex << ntHeaders.FileHeader.TimeDateStamp << std::dec << std::endl;
+                    std::cout << "Checksum: 0x" << std::hex << ntHeaders.OptionalHeader.CheckSum << std::dec << std::endl;
+                    outputFile << "Checksum: 0x" << std::hex << ntHeaders.OptionalHeader.CheckSum << std::dec << std::endl;
+                }
+            }
+        }
+    }
+    
+    // Try loading with various options
+    DWORD64 baseAddr = 0;
+    int attemptCount = 0;
+    bool symbolsLoaded = false;
+    
+    // Method 1: Standard loading
+    std::cout << "Attempt " << ++attemptCount << ": Standard symbol loading..." << std::endl;
+    outputFile << "Attempt " << attemptCount << ": Standard symbol loading..." << std::endl;
+    baseAddr = SymLoadModuleEx(hProcess, NULL, ansiModuleName, NULL, (DWORD64)moduleBase, (DWORD)moduleSize, NULL, 0);
+    
+    if (baseAddr != 0 || GetLastError() == ERROR_SUCCESS) {
+        std::cout << "Standard loading succeeded." << std::endl;
+        outputFile << "Standard loading succeeded." << std::endl;
+        symbolsLoaded = true;
+    } else {
+        DWORD error = GetLastError();
+        std::cout << "Standard loading failed. Error: " << error << std::endl;
+        outputFile << "Standard loading failed. Error: " << error << std::endl;
+        
+        // Method 2: Try with explicit flags
+        std::cout << "Attempt " << ++attemptCount << ": Loading with SLMFLAG_VIRTUAL..." << std::endl;
+        outputFile << "Attempt " << attemptCount << ": Loading with SLMFLAG_VIRTUAL..." << std::endl;
+        baseAddr = SymLoadModuleEx(
+            hProcess, NULL, ansiModuleName, NULL, (DWORD64)moduleBase, (DWORD)moduleSize,
+            NULL, SLMFLAG_VIRTUAL | SLMFLAG_ALT_INDEX
+        );
+        
+        if (baseAddr != 0 || GetLastError() == ERROR_SUCCESS) {
+            std::cout << "Loading with SLMFLAG_VIRTUAL succeeded." << std::endl;
+            outputFile << "Loading with SLMFLAG_VIRTUAL succeeded." << std::endl;
+            symbolsLoaded = true;
+        } else {
+            error = GetLastError();
+            std::cout << "Loading with SLMFLAG_VIRTUAL failed. Error: " << error << std::endl;
+            outputFile << "Loading with SLMFLAG_VIRTUAL failed. Error: " << error << std::endl;
+            
+            // Method 3: Try with system directory path
+            char systemDir[MAX_PATH] = {0};
+            if (GetSystemDirectoryA(systemDir, MAX_PATH)) {
+                std::string fullPath = std::string(systemDir) + "\\" + ansiModuleName;
+                std::cout << "Attempt " << ++attemptCount << ": Loading from system directory: " << fullPath << std::endl;
+                outputFile << "Attempt " << attemptCount << ": Loading from system directory: " << fullPath << std::endl;
+                
+                baseAddr = SymLoadModuleEx(
+                    hProcess, NULL, fullPath.c_str(), NULL, (DWORD64)moduleBase, (DWORD)moduleSize, NULL, 0
+                );
+                
+                if (baseAddr != 0 || GetLastError() == ERROR_SUCCESS) {
+                    std::cout << "Loading from system directory succeeded." << std::endl;
+                    outputFile << "Loading from system directory succeeded." << std::endl;
+                    symbolsLoaded = true;
+                } else {
+                    error = GetLastError();
+                    std::cout << "Loading from system directory failed. Error: " << error << std::endl;
+                    outputFile << "Loading from system directory failed. Error: " << error << std::endl;
+                }
+            }
+            
+            // Method 4: Try with manual PDB path
+            if (!symbolsLoaded) {
+                std::string pdbPath = "LocalPDBs\\" + std::string(ansiModuleName);
+                size_t extPos = pdbPath.rfind('.');
+                if (extPos != std::string::npos) {
+                    pdbPath = pdbPath.substr(0, extPos) + ".pdb";
+                }
+                
+                std::cout << "Attempt " << ++attemptCount << ": Checking for local PDB: " << pdbPath << std::endl;
+                outputFile << "Attempt " << attemptCount << ": Checking for local PDB: " << pdbPath << std::endl;
+                
+                // Check if the file exists
+                FILE* pdbFile = fopen(pdbPath.c_str(), "rb");
+                if (pdbFile) {
+                    fclose(pdbFile);
+                    std::cout << "Local PDB found. Attempting to load..." << std::endl;
+                    outputFile << "Local PDB found. Attempting to load..." << std::endl;
+                    
+                    // Create a symbol path that prioritizes our local PDB
+                    std::string localPath = ".;LocalPDBs;" + symbolPath;
+                    SymSetSearchPath(hProcess, localPath.c_str());
+                    
+                    baseAddr = SymLoadModuleEx(
+                        hProcess, NULL, ansiModuleName, NULL, (DWORD64)moduleBase, (DWORD)moduleSize, NULL, 0
+                    );
+                    
+                    if (baseAddr != 0 || GetLastError() == ERROR_SUCCESS) {
+                        std::cout << "Loading with local PDB succeeded." << std::endl;
+                        outputFile << "Loading with local PDB succeeded." << std::endl;
+                        symbolsLoaded = true;
+                    } else {
+                        error = GetLastError();
+                        std::cout << "Loading with local PDB failed. Error: " << error << std::endl;
+                        outputFile << "Loading with local PDB failed. Error: " << error << std::endl;
+                    }
+                } else {
+                    std::cout << "Local PDB not found. Skipping this method." << std::endl;
+                    outputFile << "Local PDB not found. Skipping this method." << std::endl;
+                }
+            }
+        }
+    }
+    
+    if (!symbolsLoaded) {
+        std::cerr << "All symbol loading attempts failed." << std::endl;
+        outputFile << "All symbol loading attempts failed." << std::endl;
+        outputFile << "\n--- Symbol Loading Failed ---" << std::endl;
+        outputFile << "Unable to load symbols after " << attemptCount << " attempts." << std::endl;
+        outputFile << "Please download symbols manually and place them in the LocalPDBs directory." << std::endl;
+        outputFile << "You can use symchk.exe from the Debugging Tools for Windows:" << std::endl;
+        outputFile << "symchk /r " << ansiModuleName << " /s SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols" << std::endl;
+        outputFile << "\nOr use the .symfix command in WinDbg to set up symbol paths." << std::endl;
+        outputFile.close();
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    std::cout << "Symbols successfully loaded at base: 0x" << std::hex << (baseAddr != 0 ? baseAddr : (DWORD64)moduleBase) << std::dec << std::endl;
+    outputFile << "Symbols successfully loaded at base: 0x" << std::hex << (baseAddr != 0 ? baseAddr : (DWORD64)moduleBase) << std::dec << std::endl;
+    
+    // Get module info to verify exactly what symbols were loaded
+    IMAGEHLP_MODULE64 modInfo = { 0 };
+    modInfo.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
+    
+    if (SymGetModuleInfo64(hProcess, (DWORD64)moduleBase, &modInfo)) {
+        std::cout << "Module information retrieved:" << std::endl;
+        outputFile << "\nModule information retrieved:" << std::endl;
+        
+        std::cout << "  Image name: " << modInfo.ImageName << std::endl;
+        outputFile << "  Image name: " << modInfo.ImageName << std::endl;
+        std::cout << "  Loaded image name: " << modInfo.LoadedImageName << std::endl;
+        outputFile << "  Loaded image name: " << modInfo.LoadedImageName << std::endl;
+        std::cout << "  Loaded PDB name: " << modInfo.LoadedPdbName << std::endl;
+        outputFile << "  Loaded PDB name: " << modInfo.LoadedPdbName << std::endl;
+        
+        std::cout << "  Symbol type: ";
+        outputFile << "  Symbol type: ";
+        
+        switch (modInfo.SymType) {
+            case SymNone:
+                std::cout << "SymNone (No symbols loaded)" << std::endl;
+                outputFile << "SymNone (No symbols loaded)" << std::endl;
+                break;
+            case SymCoff:
+                std::cout << "SymCoff (COFF symbols)" << std::endl;
+                outputFile << "SymCoff (COFF symbols)" << std::endl;
+                break;
+            case SymCv:
+                std::cout << "SymCv (CodeView symbols)" << std::endl;
+                outputFile << "SymCv (CodeView symbols)" << std::endl;
+                break;
+            case SymPdb:
+                std::cout << "SymPdb (PDB symbols)" << std::endl;
+                outputFile << "SymPdb (PDB symbols)" << std::endl;
+                break;
+            case SymExport:
+                std::cout << "SymExport (Export symbols only)" << std::endl;
+                outputFile << "SymExport (Export symbols only)" << std::endl;
+                break;
+            case SymDeferred:
+                std::cout << "SymDeferred (Deferred loading)" << std::endl;
+                outputFile << "SymDeferred (Deferred loading)" << std::endl;
+                break;
+            case SymSym:
+                std::cout << "SymSym (SYM file)" << std::endl;
+                outputFile << "SymSym (SYM file)" << std::endl;
+                break;
+            default:
+                std::cout << "Unknown (" << modInfo.SymType << ")" << std::endl;
+                outputFile << "Unknown (" << modInfo.SymType << ")" << std::endl;
+                break;
+        }
+        
+        if (modInfo.SymType == SymNone || modInfo.SymType == SymExport) {
+            std::cout << "WARNING: Only export symbols or no symbols loaded!" << std::endl;
+            outputFile << "WARNING: Only export symbols or no symbols loaded!" << std::endl;
+        }
+    } else {
+        std::cerr << "Failed to get module information. Error: " << GetLastError() << std::endl;
+        outputFile << "Failed to get module information. Error: " << GetLastError() << std::endl;
+    }
+    
+    // Verify we actually have symbols by looking up specific exports
+    outputFile << "\n--- Symbol Verification ---" << std::endl;
+    std::cout << "Verifying symbols by looking up known exports..." << std::endl;
+    outputFile << "Verifying symbols by looking up known exports..." << std::endl;
+    
+    bool testLookupSuccess = false;
+    struct KnownSymbol {
+        const char* name;
+        bool found;
+        DWORD64 address;
+    };
+    
+    KnownSymbol knownSymbols[] = {
+        {"ExAllocatePool2", false, 0},
+        {"ExAllocatePoolWithTag", false, 0},
+        {"KeInitializeSpinLock", false, 0},
+        {"ObRegisterCallbacks", false, 0},
+        {"PsSetCreateProcessNotifyRoutine", false, 0},
+        {"PsSetCreateThreadNotifyRoutine", false, 0},
+        {"PsSetLoadImageNotifyRoutine", false, 0},
+        {"KeQueryInterruptTime", false, 0},
+        {"RtlInitUnicodeString", false, 0},
+        {"MmGetSystemRoutineAddress", false, 0}
+    };
+    
+    SYMBOL_INFO_PACKAGE symbolInfo = { 0 };
+    symbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbolInfo.si.MaxNameLen = MAX_SYM_NAME;
+    
+    int foundCount = 0;
+    for (auto& symbol : knownSymbols) {
+        if (SymFromName(hProcess, symbol.name, &symbolInfo.si)) {
+            symbol.found = true;
+            symbol.address = symbolInfo.si.Address;
+            std::cout << "Found " << symbol.name << " at 0x" << std::hex << symbol.address << std::dec << std::endl;
+            outputFile << "Found " << symbol.name << " at 0x" << std::hex << symbol.address << std::dec << std::endl;
+            foundCount++;
+            testLookupSuccess = true;
+        } else {
+            std::cout << "Could not find " << symbol.name << ". Error: " << GetLastError() << std::endl;
+            outputFile << "Could not find " << symbol.name << ". Error: " << GetLastError() << std::endl;
+        }
+    }
+    
+    std::cout << "Found " << foundCount << " out of " << _countof(knownSymbols) << " known symbols." << std::endl;
+    outputFile << "Found " << foundCount << " out of " << _countof(knownSymbols) << " known symbols." << std::endl;
+    
+    if (!testLookupSuccess) {
+        std::cerr << "WARNING: Could not find any known symbols - symbol data may be incomplete!" << std::endl;
+        outputFile << "WARNING: Could not find any known symbols - symbol data may be incomplete!" << std::endl;
+    }
+    
+    // Now let's try our actual callback structures
+    outputFile << "\n--- Callback Symbol Verification ---" << std::endl;
+    const char* callbackSymbols[] = {
+        SYMBOL_LOAD_IMAGE_CALLBACKS,
+        SYMBOL_PROCESS_CALLBACKS,
+        SYMBOL_THREAD_CALLBACKS,
+        SYMBOL_REGISTRY_CALLBACKS
+    };
+    
+    int callbacksFound = 0;
+    for (const char* symbol : callbackSymbols) {
+        if (SymFromName(hProcess, symbol, &symbolInfo.si)) {
+            std::cout << "Found callback table " << symbol << " at 0x" << std::hex << symbolInfo.si.Address << std::dec << std::endl;
+            outputFile << "Found callback table " << symbol << " at 0x" << std::hex << symbolInfo.si.Address << std::dec << std::endl;
+            callbacksFound++;
+        } else {
+            std::cout << "Could not find callback table " << symbol << ". Error: " << GetLastError() << std::endl;
+            outputFile << "Could not find callback table " << symbol << ". Error: " << GetLastError() << std::endl;
+        }
+    }
+    
+    std::cout << "Found " << callbacksFound << " out of " << _countof(callbackSymbols) << " callback tables." << std::endl;
+    outputFile << "Found " << callbacksFound << " out of " << _countof(callbackSymbols) << " callback tables." << std::endl;
+    
+    // Now try to enumerate all symbols
+    outputFile << "\n--- Symbol Enumeration ---" << std::endl;
     struct SYMBOL_CONTEXT {
         std::ofstream* file;
         int count;
@@ -1216,14 +1535,176 @@ bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, con
     };
     
     std::cout << "Enumerating symbols... " << std::endl;
-    if (!SymEnumSymbols(hProcess, baseAddr, "*", enumSymbolsCallback, &context)) {
+    outputFile << "Enumerating symbols... " << std::endl;
+    
+    // First try the normal enumeration
+    BOOL enumResult = SymEnumSymbols(hProcess, (DWORD64)moduleBase, "*", enumSymbolsCallback, &context);
+    
+    if (!enumResult || context.count == 0) {
+        DWORD error = GetLastError();
+        std::cerr << "Normal enumeration failed or found no symbols. Error: " << error << std::endl;
+        outputFile << "Normal enumeration failed or found no symbols. Error: " << error << std::endl;
+        
+        // Try other symbol enumeration methods
+        std::cout << "Trying enumeration with only exported symbols..." << std::endl;
+        outputFile << "Trying enumeration with only exported symbols..." << std::endl;
+        
+        // Method 2: Try to enumerate exports only
+        SYMBOL_CONTEXT exportContext = { &outputFile, 0 };
+        if (SymEnumSymbols(hProcess, (DWORD64)moduleBase, NULL, enumSymbolsCallback, &exportContext)) {
+            if (exportContext.count > 0) {
+                std::cout << "Found " << exportContext.count << " exported symbols." << std::endl;
+                outputFile << "Found " << exportContext.count << " exported symbols." << std::endl;
+                context.count += exportContext.count;
+                enumResult = TRUE;
+            }
+        }
+        
+        // Method 3: Try specific prefixes that are common in Windows kernel
+        const char* patterns[] = {"*", "Nt*", "Ke*", "Ex*", "Mm*", "Io*", "Ps*", "Ob*", "Rtl*", "Hal*", "Cm*"};
+        
+        for (const char* pattern : patterns) {
+            std::cout << "Trying pattern: " << pattern << std::endl;
+            outputFile << "Trying pattern: " << pattern << std::endl;
+            
+            SYMBOL_CONTEXT patternContext = { &outputFile, 0 };
+            if (SymEnumSymbols(hProcess, (DWORD64)moduleBase, pattern, enumSymbolsCallback, &patternContext)) {
+                if (patternContext.count > 0) {
+                    std::cout << "Found " << patternContext.count << " symbols with pattern " << pattern << std::endl;
+                    outputFile << "Found " << patternContext.count << " symbols with pattern " << pattern << std::endl;
+                    context.count += patternContext.count;
+                    enumResult = TRUE;
+                }
+            }
+        }
+        
+        // Method 4: Try to use SymEnumTypes if no symbols were found
+        if (context.count == 0) {
+            std::cout << "No symbols found, trying to enumerate types..." << std::endl;
+            outputFile << "No symbols found, trying to enumerate types..." << std::endl;
+            
+            struct TYPE_CONTEXT {
+                std::ofstream* file;
+                int count;
+            };
+            
+            TYPE_CONTEXT typeContext = { &outputFile, 0 };
+            
+            auto enumTypesCallback = [](PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserContext) -> BOOL {
+                TYPE_CONTEXT* ctx = static_cast<TYPE_CONTEXT*>(UserContext);
+                std::ofstream& file = *ctx->file;
+                
+                file << "TYPE: " << std::hex << "0x" << pSymInfo->Address << std::dec;
+                file << " | " << pSymInfo->Size << " bytes | ";
+                file << pSymInfo->Name << std::endl;
+                
+                ctx->count++;
+                return TRUE;
+            };
+            
+            if (SymEnumTypes(hProcess, (DWORD64)moduleBase, enumTypesCallback, &typeContext)) {
+                if (typeContext.count > 0) {
+                    std::cout << "Found " << typeContext.count << " types." << std::endl;
+                    outputFile << "Found " << typeContext.count << " types." << std::endl;
+                    context.count += typeContext.count;
+                    enumResult = TRUE;
+                }
+            }
+        }
+    }
+    
+    if (!enumResult) {
         DWORD error = GetLastError();
         std::cerr << "Error enumerating symbols: " << error << std::endl;
         outputFile << "ERROR: Failed to enumerate symbols. Error code: " << error << std::endl;
+        
+        // Let's also verify if we have access to a few common symbols and list them
+        outputFile << "\nAttempting to verify individual symbols:\n";
+        
+        const char* commonSymbols[] = {
+            "ExAllocatePool2", "ExAllocatePoolWithTag", "KeInitializeSpinLock",
+            "ObRegisterCallbacks", "PsSetCreateProcessNotifyRoutine", "MmGetSystemRoutineAddress",
+            "ZwOpenProcess", "ZwOpenThread", "NtQuerySystemInformation"
+        };
+        
+        int individualFound = 0;
+        for (const char* sym : commonSymbols) {
+            SYMBOL_INFO_PACKAGE symInfo = { 0 };
+            symInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
+            symInfo.si.MaxNameLen = MAX_SYM_NAME;
+            
+            if (SymFromName(hProcess, sym, &symInfo.si)) {
+                outputFile << sym << " - Found at 0x" << std::hex << symInfo.si.Address << std::dec << "\n";
+                individualFound++;
+            } else {
+                outputFile << sym << " - Not found\n";
+            }
+        }
+        
+        outputFile << "Found " << individualFound << " out of " << _countof(commonSymbols) << " common symbols.\n";
+        
+        // Final fallback: Try to enumerate symbol by manually calling SymGetSymFromAddr64 at regular intervals
+        if (individualFound == 0 && moduleSize > 0) {
+            std::cout << "Trying manual symbol lookup at regular intervals..." << std::endl;
+            outputFile << "\nTrying manual symbol lookup at regular intervals...\n";
+            
+            const DWORD64 interval = 4096; // Try every 4KB
+            int manualFound = 0;
+            
+            for (DWORD64 offset = 0; offset < moduleSize; offset += interval) {
+                DWORD64 address = (DWORD64)moduleBase + offset;
+                DWORD64 displacement = 0;
+                
+                SYMBOL_INFO_PACKAGE symInfo = { 0 };
+                symInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
+                symInfo.si.MaxNameLen = MAX_SYM_NAME;
+                
+                if (SymFromAddr(hProcess, address, &displacement, &symInfo.si)) {
+                    outputFile << "0x" << std::hex << symInfo.si.Address << std::dec;
+                    outputFile << " | " << symInfo.si.Size << " bytes | ";
+                    outputFile << symInfo.si.Name;
+                    
+                    if (displacement > 0) {
+                        outputFile << " + 0x" << std::hex << displacement << std::dec;
+                    }
+                    
+                    outputFile << std::endl;
+                    manualFound++;
+                    
+                    // Limit to 1000 symbols to avoid huge files
+                    if (manualFound >= 1000) {
+                        outputFile << "Reached manual lookup limit of 1000 symbols. Stopping.\n";
+                        break;
+                    }
+                }
+            }
+            
+            if (manualFound > 0) {
+                std::cout << "Found " << manualFound << " symbols via manual lookup." << std::endl;
+                outputFile << "Found " << manualFound << " symbols via manual lookup." << std::endl;
+                context.count += manualFound;
+            } else {
+                std::cout << "No symbols found via manual lookup." << std::endl;
+                outputFile << "No symbols found via manual lookup." << std::endl;
+            }
+        }
     }
     
-    std::cout << "Found " << context.count << " symbols." << std::endl;
+    std::cout << "Total symbols found: " << context.count << std::endl;
     outputFile << "\nTotal symbols found: " << context.count << std::endl;
+    
+    if (context.count == 0) {
+        outputFile << "\n--- TROUBLESHOOTING SUGGESTIONS ---" << std::endl;
+        outputFile << "1. Make sure you have an internet connection to download symbols" << std::endl;
+        outputFile << "2. Check that the Symbol Path is correct:" << std::endl;
+        outputFile << "   Current Symbol Path: " << symbolPath << std::endl;
+        outputFile << "3. Try downloading symbols manually with symchk.exe:" << std::endl;
+        outputFile << "   symchk /r " << ansiModuleName << " /s SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols" << std::endl;
+        outputFile << "4. Try placing PDB file manually in the LocalPDBs directory" << std::endl;
+        outputFile << "5. Check that symbol server is accessible from your network" << std::endl;
+        outputFile << "6. Try using WinDbg to load symbols for this module" << std::endl;
+    }
+    
     outputFile << "===== End of Symbol Dump =====" << std::endl;
     
     outputFile.close();
@@ -1232,6 +1713,183 @@ bool DumpModuleSymbolsToFile(HANDLE deviceHandle, const wchar_t* moduleName, con
     return context.count > 0;
 }
 
+// Function to enumerate callbacks with symbol lookup
+bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE tableType, const char* symbolName) {
+    if (deviceHandle == INVALID_HANDLE_VALUE) {
+        std::cerr << "Invalid device handle." << std::endl;
+        return false;
+    }
+    
+    // Initialize symbols
+    HANDLE hProcess = GetCurrentProcess();
+    
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
+    
+    if (!SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
+        std::cerr << "Failed to initialize symbols. Error code: " << GetLastError() << std::endl;
+        return false;
+    }
+    
+    // Get ntoskrnl.exe base address
+    const DWORD bufferSize = sizeof(MODULE_INFO) * MAX_MODULES;
+    std::vector<BYTE> buffer(bufferSize, 0);
+    PMODULE_INFO moduleInfos = reinterpret_cast<PMODULE_INFO>(buffer.data());
+
+    DWORD bytesReturned = 0;
+    BOOL success = DeviceIoControl(
+        deviceHandle,
+        IOCTL_GET_MODULES,
+        NULL, 0,
+        moduleInfos, bufferSize,
+        &bytesReturned,
+        NULL
+    );
+    
+    if (!success) {
+        std::cerr << "Failed to get modules. Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
+    PVOID ntosAddr = NULL;
+    
+    // Find ntoskrnl.exe
+    for (DWORD i = 0; i < moduleCount; i++) {
+        std::wstring path = moduleInfos[i].Path;
+        std::transform(path.begin(), path.end(), path.begin(), ::towlower);
+        
+        if (path.find(L"ntoskrnl.exe") != std::wstring::npos || 
+            path.find(L"ntkrnlmp.exe") != std::wstring::npos ||
+            path.find(L"ntkrnlpa.exe") != std::wstring::npos) {
+            ntosAddr = moduleInfos[i].BaseAddress;
+            std::wcout << L"Found ntoskrnl at: 0x" << std::hex << ntosAddr << std::dec << std::endl;
+            break;
+        }
+    }
+    
+    if (!ntosAddr) {
+        std::cerr << "Failed to find ntoskrnl.exe module" << std::endl;
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    // Load ntoskrnl symbols
+    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, "ntoskrnl.exe", NULL, (DWORD64)ntosAddr, 0, NULL, 0);
+    if (baseAddr == 0 && GetLastError() != ERROR_SUCCESS) {
+        std::cerr << "Failed to load symbols for ntoskrnl.exe. Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    // Look up the callback table symbol
+    SYMBOL_INFO_PACKAGE symbolInfo = { 0 };
+    symbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbolInfo.si.MaxNameLen = MAX_SYM_NAME;
+    
+    if (!SymFromName(hProcess, symbolName, &symbolInfo.si)) {
+        std::cerr << "Failed to find symbol: " << symbolName << ". Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    std::cout << "Found symbol " << symbolName << " at address: 0x" 
+              << std::hex << symbolInfo.si.Address << std::dec << std::endl;
+    
+    // Prepare the request to enumerate callbacks
+    PVOID callbackTable = (PVOID)symbolInfo.si.Address;
+    
+    // Calculate required size for the request
+    const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
+    ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
+    
+    // Allocate request buffer
+    std::vector<BYTE> requestBuffer(requestSize, 0);
+    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
+    
+    // Initialize request
+    request->Type = tableType;
+    request->TableAddress = callbackTable;
+    request->MaxCallbacks = maxCallbacks;
+    
+    // Send request to driver
+    bytesReturned = 0;
+    success = DeviceIoControl(
+        deviceHandle,
+        IOCTL_ENUM_CALLBACKS,
+        request, requestSize,
+        request, requestSize,
+        &bytesReturned,
+        nullptr
+    );
+    
+    if (!success) {
+        std::cerr << "Failed to enumerate callbacks. Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return false;
+    }
+    
+    // Display results
+    std::cout << "Retrieved " << request->FoundCallbacks << " callbacks from " 
+              << symbolName << " at address 0x" << std::hex << callbackTable << std::dec << std::endl;
+    
+    // Determine callback type string for display
+    std::string callbackTypeStr;
+    switch (tableType) {
+        case CallbackTableLoadImage:
+            callbackTypeStr = "Load Image";
+            break;
+        case CallbackTableCreateProcess:
+            callbackTypeStr = "Process Creation";
+            break;
+        case CallbackTableCreateThread:
+            callbackTypeStr = "Thread Creation";
+            break;
+        case CallbackTableRegistry:
+            callbackTypeStr = "Registry";
+            break;
+        default:
+            callbackTypeStr = "Unknown";
+            break;
+    }
+    
+    std::cout << std::endl << "==== " << callbackTypeStr << " Callbacks ====" << std::endl << std::endl;
+    
+    // Print callback information
+    for (ULONG i = 0; i < request->FoundCallbacks; i++) {
+        PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
+        
+        std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
+        std::cout << "    Name: " << info->CallbackName << std::endl;
+        std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
+        
+        if (info->Context != 0) {
+            std::cout << "    Context: 0x" << std::hex << info->Context << std::dec << std::endl;
+        }
+        
+        // Try to get symbol information if possible
+        char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = MAX_SYM_NAME;
+        
+        DWORD64 displacement = 0;
+        if (SymFromAddr(hProcess, (DWORD64)info->Address, &displacement, pSymbol)) {
+            std::cout << "    Symbol: " << pSymbol->Name;
+            if (displacement > 0) {
+                std::cout << " + 0x" << std::hex << displacement << std::dec;
+            }
+            std::cout << std::endl;
+        }
+        
+        std::cout << std::endl;
+    }
+    
+    SymCleanup(hProcess);
+    return true;
+}
+
+// Main function - update with additional menu options
 int main() {
     std::cout << "Elemetry Client - Driver Module and Callback Enumerator" << std::endl;
     std::cout << "========================================================" << std::endl << std::endl;
@@ -1262,9 +1920,13 @@ int main() {
         std::cout << "1. Enumerate kernel modules" << std::endl;
         std::cout << "2. Enumerate kernel callbacks" << std::endl;
         std::cout << "3. Dump all kernel symbols to file" << std::endl;
+        std::cout << "4. Enumerate load image callbacks (PspLoadImageNotifyRoutine)" << std::endl;
+        std::cout << "5. Enumerate process creation callbacks (PspCreateProcessNotifyRoutine)" << std::endl;
+        std::cout << "6. Enumerate thread creation callbacks (PspCreateThreadNotifyRoutine)" << std::endl;
+        std::cout << "7. Enumerate registry callbacks (CmCallbackListHead)" << std::endl;
         std::cout << "0. Exit" << std::endl;
         std::cout << std::endl;
-        std::cout << "Select an operation (0-3): ";
+        std::cout << "Select an operation (0-7): ";
         
         int choice = 0;
         std::cin >> choice;
@@ -1287,6 +1949,26 @@ int main() {
             case 3:
                 std::cout << std::endl << "Dumping kernel symbols to file..." << std::endl;
                 DumpAllSymbolsToFile(deviceHandle);
+                break;
+                
+            case 4:
+                std::cout << std::endl << "Enumerating load image callbacks..." << std::endl;
+                EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableLoadImage, SYMBOL_LOAD_IMAGE_CALLBACKS);
+                break;
+                
+            case 5:
+                std::cout << std::endl << "Enumerating process creation callbacks..." << std::endl;
+                EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateProcess, SYMBOL_PROCESS_CALLBACKS);
+                break;
+                
+            case 6:
+                std::cout << std::endl << "Enumerating thread creation callbacks..." << std::endl;
+                EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS);
+                break;
+                
+            case 7:
+                std::cout << std::endl << "Enumerating registry callbacks..." << std::endl;
+                EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableRegistry, SYMBOL_REGISTRY_CALLBACKS);
                 break;
                 
             default:

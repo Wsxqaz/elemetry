@@ -828,119 +828,79 @@ NTSTATUS ParseModuleExports(_Inout_ PPE_PARSE_CONTEXT ParseContext)
     return status; // Return STATUS_SUCCESS or STATUS_BUFFER_OVERFLOW if truncated
 }
 
-// --- Kernel Memory Operations ---
-
-// Safely read kernel memory from any address
-NTSTATUS ReadKernelMemory(
+// More robust kernel memory read function for protected areas
+NTSTATUS ReadProtectedKernelMemory(
     _In_ PVOID KernelAddress,
-    _Out_writes_bytes_(Size) PVOID UserBuffer,
+    _Out_writes_bytes_(Size) PVOID OutputBuffer, 
     _In_ SIZE_T Size,
     _Out_ PSIZE_T BytesRead
 )
 {
-    NTSTATUS status = STATUS_SUCCESS;
     *BytesRead = 0;
 
-    // Basic input validation
-    if (!KernelAddress || !UserBuffer || Size == 0) {
+    // Basic validation
+    if (!KernelAddress || !OutputBuffer || Size == 0) {
         return STATUS_INVALID_PARAMETER;
     }
 
+    // Use a different approach with MDL for reading protected memory
+    PMDL mdl = NULL;
+    PVOID mappedAddress = NULL;
+
     __try {
-        // ProbeForRead validates memory can be safely read
-        ProbeForRead(KernelAddress, Size, 1);
-        
-        // Use MmCopyMemory which is safer than direct memcpy
-        MM_COPY_ADDRESS sourceAddress;
-        sourceAddress.VirtualAddress = KernelAddress;
-        
-        status = MmCopyMemory(UserBuffer, sourceAddress, Size, MM_COPY_MEMORY_VIRTUAL, BytesRead);
-        
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] ReadKernelMemory: MmCopyMemory failed with status 0x%X\n", status);
-            *BytesRead = 0;
+        // Create an MDL for the target memory
+        mdl = IoAllocateMdl(KernelAddress, (ULONG)Size, FALSE, FALSE, NULL);
+        if (!mdl) {
+            DbgPrint("[elemetry] ReadProtectedKernelMemory: Failed to allocate MDL\n");
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        status = GetExceptionCode();
-        DbgPrint("[elemetry] ReadKernelMemory: Exception 0x%X while reading memory at %p\n", 
-                status, KernelAddress);
-        *BytesRead = 0;
-    }
 
-    return status;
-}
-
-// IOCTL handler for reading kernel memory
-NTSTATUS HandleReadKernelMemoryIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PVOID inputBuffer = Irp->AssociatedIrp.SystemBuffer;
-    ULONG inputBufferLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
-    ULONG outputBufferLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
-    
-    DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: Request received. Buffer size: %u\n", outputBufferLength);
-    
-    // Validate buffer sizes
-    if (inputBufferLength < sizeof(KERNEL_READ_REQUEST) || 
-        outputBufferLength < sizeof(KERNEL_READ_REQUEST)) {
-        DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: Buffer too small\n");
-        status = STATUS_BUFFER_TOO_SMALL;
-        Irp->IoStatus.Information = 0;
-        goto Exit;
-    }
-    
-    // Get request data from input buffer
-    PKERNEL_READ_REQUEST request = (PKERNEL_READ_REQUEST)inputBuffer;
-    
-    // Allocate temporary buffer in kernel space
-    PVOID kernelBuffer = ExAllocatePool2(POOL_FLAG_NON_PAGED, request->Size, 'RmpT');
-    if (!kernelBuffer) {
-        DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: Failed to allocate buffer\n");
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        Irp->IoStatus.Information = 0;
-        goto Exit;
-    }
-    
-    // Read from kernel address to our kernel buffer
-    SIZE_T bytesRead = 0;
-    status = ReadKernelMemory(request->Address, kernelBuffer, request->Size, &bytesRead);
-    
-    if (NT_SUCCESS(status)) {
-        // Now copy from kernel buffer to user buffer
+        // Try to probe and lock the pages
         __try {
-            // Validate user buffer
-            ProbeForWrite(request->Buffer, request->Size, 1);
-            
-            // Copy data to user buffer
-            RtlCopyMemory(request->Buffer, kernelBuffer, bytesRead);
-            request->BytesRead = bytesRead;
-            
-            DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: Successfully read %llu bytes from %p\n", 
-                    bytesRead, request->Address);
-                    
-            Irp->IoStatus.Information = sizeof(KERNEL_READ_REQUEST);
+            // Force mapping even for memory we don't normally have direct write access to
+            MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            IoFreeMdl(mdl);
+            DbgPrint("[elemetry] ReadProtectedKernelMemory: Exception 0x%X in MmProbeAndLockPages\n", GetExceptionCode());
+            return STATUS_ACCESS_VIOLATION;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            status = GetExceptionCode();
-            DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: Exception 0x%X accessing user buffer\n", status);
-            Irp->IoStatus.Information = 0;
-        }
-    } else {
-        DbgPrint("[elemetry] HandleReadKernelMemoryIOCTL: ReadKernelMemory failed: 0x%X\n", status);
-        Irp->IoStatus.Information = 0;
-    }
-    
-    // Free kernel buffer
-    ExFreePoolWithTag(kernelBuffer, 'RmpT');
-    
-Exit:
-    Irp->IoStatus.Status = status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return status;
-}
 
-// --- Callback Enumeration Functions ---
+        // Map the locked pages
+        mappedAddress = MmGetSystemAddressForMdlSafe(mdl, NormalPagePriority | MdlMappingNoExecute);
+        if (!mappedAddress) {
+            MmUnlockPages(mdl);
+            IoFreeMdl(mdl);
+            DbgPrint("[elemetry] ReadProtectedKernelMemory: MmGetSystemAddressForMdlSafe failed\n");
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        // Now copy from the mapped address to the output buffer
+        RtlCopyMemory(OutputBuffer, mappedAddress, Size);
+        *BytesRead = Size;
+        
+        // Clean up
+        MmUnlockPages(mdl);
+        IoFreeMdl(mdl);
+        
+        DbgPrint("[elemetry] ReadProtectedKernelMemory: Successfully read %llu bytes from %p\n", 
+                (ULONGLONG)Size, KernelAddress);
+                
+        return STATUS_SUCCESS;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Clean up if exception occurs
+        if (mdl) {
+            if (mappedAddress) {
+                MmUnlockPages(mdl);
+            }
+            IoFreeMdl(mdl);
+        }
+        
+        NTSTATUS exceptionCode = GetExceptionCode();
+        DbgPrint("[elemetry] ReadProtectedKernelMemory: Exception 0x%X while reading memory at %p\n", 
+                exceptionCode, KernelAddress);
+        return exceptionCode;
+    }
+}
 
 // Enumerate load image notification callbacks
 NTSTATUS EnumerateLoadImageCallbacks(
@@ -975,12 +935,26 @@ NTSTATUS EnumerateLoadImageCallbacks(
     
     // Read callback pointers from the table
     SIZE_T bytesRead = 0;
-    status = ReadKernelMemory(
+    
+    // First try with standard read
+    status = ReadProtectedKernelMemory(
         CallbackTable, 
         callbackPointers, 
         sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS, 
         &bytesRead
     );
+    
+    // If standard read fails, try protected read
+    if (!NT_SUCCESS(status) || bytesRead < sizeof(PVOID)) {
+        DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Normal read failed, trying protected read\n");
+        
+        status = ReadProtectedKernelMemory(
+            CallbackTable, 
+            callbackPointers, 
+            sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS, 
+            &bytesRead
+        );
+    }
     
     if (!NT_SUCCESS(status)) {
         DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to read callback table: 0x%X\n", status);
@@ -1001,7 +975,7 @@ NTSTATUS EnumerateLoadImageCallbacks(
         CallbackArray[count].Type = CALLBACK_TYPE::PsLoadImage;
         CallbackArray[count].Address = callbackPointers[i];
         
-        // Get base address to determine which module this belongs to
+        // Get base address to determine which module this callback belongs to
         ULONG_PTR callbackAddress = (ULONG_PTR)callbackPointers[i];
         BOOLEAN found = FALSE;
         
@@ -1048,235 +1022,7 @@ NTSTATUS EnumerateLoadImageCallbacks(
     return status;
 }
 
-// Structures and patterns for memory search
-typedef struct _CALLBACK_SEARCH_PATTERN {
-    UCHAR* Pattern;      // Pattern bytes to search for
-    SIZE_T Size;         // Size of pattern
-    LONG Offset;         // Offset from pattern to get to the instruction containing the address
-} CALLBACK_SEARCH_PATTERN, *PCALLBACK_SEARCH_PATTERN;
-
-// Byte patterns for different Windows versions
-// These are from TelemetrySourcerer and cover most Windows 10 versions
-static UCHAR CP_PATTERN_W10_WX[] = { 0x48, 0x8d, 0x0c, 0xdd, 0x00, 0x00, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x49, 0x03, 0xcd, 0x48, 0x8b };
-
-// Memory search function similar to TelemetrySourcerer's MemorySearch
-NTSTATUS MemorySearch(PCUCHAR StartAddress, PCUCHAR EndAddress, PCUCHAR PatternBuffer, SIZE_T PatternLength, PUCHAR* FoundAddress)
-{
-    *FoundAddress = (PUCHAR)StartAddress;
-
-    while (*FoundAddress < EndAddress) {
-        BOOLEAN match = TRUE;
-        for (SIZE_T i = 0; i < PatternLength; i++) {
-            if ((*FoundAddress)[i] != PatternBuffer[i]) {
-                match = FALSE;
-                break;
-            }
-        }
-        
-        if (match) {
-            return STATUS_SUCCESS;
-        }
-        
-        *FoundAddress += 1;
-    }
-
-    return STATUS_NOT_FOUND;
-}
-
-// Function to find the kernel address of PspCreateProcessNotifyRoutine
-NTSTATUS FindPspCreateProcessNotifyRoutine(PVOID* CallbackTableAddress)
-{
-    NTSTATUS status = STATUS_NOT_FOUND;
-    
-    // Initialize to NULL
-    *CallbackTableAddress = NULL;
-    
-    DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: Searching for callback table...\n");
-    
-    // Get ntoskrnl.exe base address
-    UNICODE_STRING routineName;
-    RtlInitUnicodeString(&routineName, L"PsSetCreateProcessNotifyRoutine");
-    PVOID psSetCreateProcessNotifyRoutine = MmGetSystemRoutineAddress(&routineName);
-    
-    if (!psSetCreateProcessNotifyRoutine) {
-        DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: Failed to get PsSetCreateProcessNotifyRoutine address\n");
-        return STATUS_NOT_FOUND;
-    }
-    
-    DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: PsSetCreateProcessNotifyRoutine at %p\n", psSetCreateProcessNotifyRoutine);
-    
-    // Define search range - examine 4KB around the routine
-    ULONG searchSize = 4096;
-    PUCHAR startAddress = (PUCHAR)psSetCreateProcessNotifyRoutine;
-    PUCHAR endAddress = startAddress + searchSize;
-    
-    // Create search pattern object
-    CALLBACK_SEARCH_PATTERN pattern;
-    pattern.Pattern = CP_PATTERN_W10_WX;
-    pattern.Size = sizeof(CP_PATTERN_W10_WX);
-    pattern.Offset = -4;  // Offset to the pointer
-    
-    // Search for the pattern
-    PUCHAR foundAddress = NULL;
-    status = MemorySearch(startAddress, endAddress, pattern.Pattern, pattern.Size, &foundAddress);
-    
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: Pattern not found\n");
-        return status;
-    }
-    
-    DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: Pattern found at %p\n", foundAddress);
-    
-    // Apply the offset to get to the instruction containing the address
-    foundAddress += pattern.Offset;
-    
-    // Extract the relative offset from the instruction
-    // This follows the pattern in TelemetrySourcerer where they do:
-    // PspSetCreateProcessNotifyRoutine += *(PLONG)(PspSetCreateProcessNotifyRoutine);
-    PLONG relativeOffset = (PLONG)foundAddress;
-    
-    // Calculate the final address
-    // The relative jump is from the *next* instruction, so add sizeof(LONG)
-    PUCHAR callbackTable = foundAddress + *relativeOffset + sizeof(LONG);
-    
-    *CallbackTableAddress = callbackTable;
-    
-    DbgPrint("[elemetry] FindPspCreateProcessNotifyRoutine: Found callback table at %p\n", *CallbackTableAddress);
-    
-    return STATUS_SUCCESS;
-}
-
-// Enumerate process creation notification callbacks - updated to use auto-detection
-NTSTATUS EnumerateCreateProcessCallbacks(
-    _In_opt_ PVOID CallbackTable,
-    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
-    _In_ ULONG MaxCallbacks,
-    _Out_ PULONG FoundCallbacks
-)
-{
-    // Implementation similar to EnumerateLoadImageCallbacks, but for process creation
-    NTSTATUS status = STATUS_SUCCESS;
-    *FoundCallbacks = 0;
-    
-    // Hard-coded array size based on known Windows internals
-    const ULONG MAX_PROCESS_CALLBACKS = 64;
-    
-    // If user didn't provide a table address, try to find it automatically
-    if (!CallbackTable) {
-        DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: No callback table provided, searching automatically\n");
-        status = FindPspCreateProcessNotifyRoutine(&CallbackTable);
-        
-        if (!NT_SUCCESS(status) || !CallbackTable) {
-            DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Failed to find callback table: 0x%X\n", status);
-            return status == STATUS_SUCCESS ? STATUS_UNSUCCESSFUL : status;
-        }
-    }
-    
-    DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Using callback table at %p\n", CallbackTable);
-    
-    // Allocate buffer for callback pointers
-    PVOID* callbackPointers = (PVOID*)ExAllocatePool2(POOL_FLAG_NON_PAGED, 
-                                                     sizeof(PVOID) * MAX_PROCESS_CALLBACKS,
-                                                     'CBpT');
-    if (!callbackPointers) {
-        DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Failed to allocate memory\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    
-    RtlZeroMemory(callbackPointers, sizeof(PVOID) * MAX_PROCESS_CALLBACKS);
-    
-    // Read callback pointers from the table
-    SIZE_T bytesRead = 0;
-    status = ReadKernelMemory(
-        CallbackTable, 
-        callbackPointers, 
-        sizeof(PVOID) * MAX_PROCESS_CALLBACKS, 
-        &bytesRead
-    );
-    
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Failed to read callback table: 0x%X\n", status);
-        ExFreePoolWithTag(callbackPointers, 'CBpT');
-        return status;
-    }
-    
-    // Process each callback pointer
-    ULONG count = 0;
-    for (ULONG i = 0; i < MAX_PROCESS_CALLBACKS && count < MaxCallbacks; i++) {
-        if (callbackPointers[i] == NULL || callbackPointers[i] == (PVOID)~0) {
-            continue;
-        }
-        
-        // For process callbacks, we need to mask out the low bits and dereference
-        PVOID actualCallback = NULL;
-        
-        // Process callback pointers have their lowest bit set for some reason
-        // We need to mask this out (0xFFFFFFFFFFFFFFF8) and then dereference
-        PVOID maskedPointer = (PVOID)((ULONG_PTR)callbackPointers[i] & 0xFFFFFFFFFFFFFFF8);
-        
-        // Read the actual callback function pointer
-        SIZE_T bytes = 0;
-        NTSTATUS readStatus = ReadKernelMemory(maskedPointer, &actualCallback, sizeof(PVOID), &bytes);
-        
-        if (!NT_SUCCESS(readStatus) || !actualCallback) {
-            DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Failed to read callback at index %u\n", i);
-            continue;
-        }
-        
-        // This is a valid callback, create an entry
-        RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
-        
-        CallbackArray[count].Type = CALLBACK_TYPE::PsProcessCreation;
-        CallbackArray[count].Address = actualCallback;
-        
-        // Get base address to determine which module this belongs to
-        ULONG_PTR callbackAddress = (ULONG_PTR)actualCallback;
-        BOOLEAN found = FALSE;
-        
-        // Try to find which module this callback belongs to
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
-            if (g_FoundModules[m].BaseAddress != NULL) {
-                ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
-                ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
-                
-                if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
-                    // Extract just the filename from the path
-                    WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
-                    PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
-                    
-                    // Convert wide char to char (ASCII only)
-                    for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
-                        CallbackArray[count].ModuleName[c] = (CHAR)FileNameOnly[c];
-                    }
-                    
-                    // Set callback name based on offset from module base
-                    sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
-                             "ProcessCallback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
-                    
-                    found = TRUE;
-                    break;
-                }
-            }
-        }
-        
-        // If module not found, use generic name
-        if (!found) {
-            RtlCopyMemory(CallbackArray[count].ModuleName, "Unknown", sizeof("Unknown"));
-            sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
-                     "ProcessCallback@0x%p", actualCallback);
-        }
-        
-        count++;
-    }
-    
-    *FoundCallbacks = count;
-    DbgPrint("[elemetry] EnumerateCreateProcessCallbacks: Found %u callbacks\n", count);
-    
-    ExFreePoolWithTag(callbackPointers, 'CBpT');
-    return status;
-}
-
-// IOCTL handler for enumerating callbacks
+// --- IOCTL Handler for EnumCallbacks - Implement updated function ---
 NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
 {
     NTSTATUS status = STATUS_SUCCESS;
@@ -1312,9 +1058,81 @@ NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
         goto Exit;
     }
     
+    // Diagnostics - print info about the address
+    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Table address: %p, Type: %d\n", 
+             request->TableAddress, request->Type);
+
     // Process the request based on callback type
     ULONG callbacksFound = 0;
     
+    // Verify the callback table address is valid
+    if (request->TableAddress == NULL) {
+        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Null table address provided\n");
+        status = STATUS_INVALID_PARAMETER;
+        goto SetResponse;
+    }
+
+    // Try to read just a few bytes to verify the address is accessible
+    PVOID testBuffer[2] = {0};
+    SIZE_T testBytesRead = 0;
+    
+    // First try normal read to see if it works
+    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Testing memory at %p with normal read\n", 
+             request->TableAddress);
+    status = ReadKernelMemory(request->TableAddress, testBuffer, sizeof(testBuffer), &testBytesRead);
+    
+    if (!NT_SUCCESS(status) || testBytesRead < sizeof(testBuffer)) {
+        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Normal read failed (0x%X), trying protected read\n", 
+                status);
+                
+        // Try protected read if normal read fails
+        status = ReadProtectedKernelMemory(request->TableAddress, testBuffer, sizeof(testBuffer), &testBytesRead);
+        
+        if (!NT_SUCCESS(status) || testBytesRead < sizeof(testBuffer)) {
+            DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Protected read also failed (0x%X)\n", status);
+            
+            // One more attempt - try to read with different method based on the table type
+            if (request->Type == CallbackTableLoadImage || 
+                request->Type == CallbackTableCreateProcess || 
+                request->Type == CallbackTableCreateThread) {
+                
+                // For these tables, try to get the actual address from the kernel
+                // Often symbols point to the variable, not the actual array
+                DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Trying to dereference symbol pointer\n");
+                
+                PVOID actualTable = NULL;
+                SIZE_T bytesRead = 0;
+                status = ReadKernelMemory(request->TableAddress, &actualTable, sizeof(PVOID), &bytesRead);
+                
+                if (NT_SUCCESS(status) && bytesRead == sizeof(PVOID) && actualTable != NULL) {
+                    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Symbol pointed to actual table at %p\n", 
+                            actualTable);
+                            
+                    // Update the table address 
+                    request->TableAddress = actualTable;
+                    
+                    // Try again with the actual address
+                    status = ReadProtectedKernelMemory(actualTable, testBuffer, sizeof(testBuffer), &testBytesRead);
+                    
+                    if (!NT_SUCCESS(status) || testBytesRead < sizeof(testBuffer)) {
+                        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: All read attempts failed\n");
+                        goto SetResponse;
+                    }
+                } else {
+                    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Failed to dereference pointer\n");
+                    goto SetResponse;
+                }
+            } else {
+                goto SetResponse;
+            }
+        }
+    }
+    
+    // If we get here, we have a working read method
+    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Successfully verified table access at %p\n", 
+            request->TableAddress);
+    
+    // Modify the enumeration functions to use our chosen read method
     switch (request->Type) {
     case CallbackTableLoadImage:
         status = EnumerateLoadImageCallbacks(
@@ -1324,23 +1142,15 @@ NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
             &callbacksFound                        // Output count
         );
         break;
-        
-    case CallbackTableCreateProcess:
-        status = EnumerateCreateProcessCallbacks(
-            request->TableAddress,
-            response->Callbacks,
-            min(maxCallbacks, request->MaxCallbacks),
-            &callbacksFound
-        );
-        break;
-        
+
     default:
         DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Unsupported callback type: %d\n", request->Type);
         status = STATUS_INVALID_PARAMETER;
         callbacksFound = 0;
         break;
     }
-    
+
+SetResponse:    
     // Set response data
     response->Type = request->Type;
     response->TableAddress = request->TableAddress;
@@ -1359,5 +1169,289 @@ NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
 Exit:
     Irp->IoStatus.Status = status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return status;
+}
+
+// Fix unused status variable in ReadKernelMemory function
+NTSTATUS ReadKernelMemory(
+    _In_ PVOID KernelAddress,
+    _Out_writes_bytes_(Size) PVOID UserBuffer,
+    _In_ SIZE_T Size,
+    _Out_ PSIZE_T BytesRead
+)
+{
+    *BytesRead = 0;
+
+    // Basic input validation
+    if (!KernelAddress || !UserBuffer || Size == 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    __try {
+        // ProbeForRead validates memory can be safely read
+        ProbeForRead(KernelAddress, Size, 1);
+        
+        // Use MmCopyMemory which is safer than direct memcpy
+        MM_COPY_ADDRESS sourceAddress;
+        sourceAddress.VirtualAddress = KernelAddress;
+        
+        NTSTATUS status = MmCopyMemory(UserBuffer, sourceAddress, Size, MM_COPY_MEMORY_VIRTUAL, BytesRead);
+        
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] ReadKernelMemory: MmCopyMemory failed with status 0x%X\n", status);
+            *BytesRead = 0;
+        }
+        
+        return status; // Return the status from MmCopyMemory
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        NTSTATUS exceptionStatus = GetExceptionCode();
+        DbgPrint("[elemetry] ReadKernelMemory: Exception 0x%X while reading memory at %p\n", 
+                exceptionStatus, KernelAddress);
+        *BytesRead = 0;
+        return exceptionStatus;
+    }
+}
+
+// Implement the missing EnumerateCreateThreadCallbacks function
+NTSTATUS EnumerateCreateThreadCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    *FoundCallbacks = 0;
+    
+    // Hard-coded array size based on known Windows internals
+    const ULONG MAX_THREAD_CALLBACKS = 64;
+    
+    // If user didn't provide a table address, we can't proceed
+    if (!CallbackTable) {
+        DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: No callback table address provided\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+    
+    DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: Using callback table at %p\n", CallbackTable);
+    
+    // Allocate buffer for callback pointers
+    PVOID* callbackPointers = (PVOID*)ExAllocatePool2(POOL_FLAG_NON_PAGED, 
+                                                     sizeof(PVOID) * MAX_THREAD_CALLBACKS,
+                                                     'CBpT');
+    if (!callbackPointers) {
+        DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: Failed to allocate memory\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    
+    RtlZeroMemory(callbackPointers, sizeof(PVOID) * MAX_THREAD_CALLBACKS);
+    
+    // Read callback pointers from the table
+    SIZE_T bytesRead = 0;
+    
+    // First try with protected read
+    status = ReadProtectedKernelMemory(
+        CallbackTable, 
+        callbackPointers, 
+        sizeof(PVOID) * MAX_THREAD_CALLBACKS, 
+        &bytesRead
+    );
+    
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: Failed to read callback table: 0x%X\n", status);
+        ExFreePoolWithTag(callbackPointers, 'CBpT');
+        return status;
+    }
+    
+    // Process each callback pointer
+    ULONG count = 0;
+    for (ULONG i = 0; i < MAX_THREAD_CALLBACKS && count < MaxCallbacks; i++) {
+        if (callbackPointers[i] == NULL || callbackPointers[i] == (PVOID)~0) {
+            continue;
+        }
+        
+        // For thread callbacks, we need to mask out the low bits and dereference (same as process callbacks)
+        PVOID actualCallback = NULL;
+        
+        // Thread callback pointers have their lowest bit set for some reason
+        // We need to mask this out (0xFFFFFFFFFFFFFFF8) and then dereference
+        PVOID maskedPointer = (PVOID)((ULONG_PTR)callbackPointers[i] & 0xFFFFFFFFFFFFFFF8);
+        
+        // Read the actual callback function pointer
+        SIZE_T bytes = 0;
+        NTSTATUS readStatus = ReadProtectedKernelMemory(maskedPointer, &actualCallback, sizeof(PVOID), &bytes);
+        
+        if (!NT_SUCCESS(readStatus) || !actualCallback) {
+            DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: Failed to read callback at index %u\n", i);
+            continue;
+        }
+        
+        // This is a valid callback, create an entry
+        RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
+        
+        CallbackArray[count].Type = CALLBACK_TYPE::PsThreadCreation;
+        CallbackArray[count].Address = actualCallback;
+        
+        // Get base address to determine which module this callback belongs to
+        ULONG_PTR callbackAddress = (ULONG_PTR)actualCallback;
+        BOOLEAN found = FALSE;
+        
+        // Try to find which module this callback belongs to
+        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+            if (g_FoundModules[m].BaseAddress != NULL) {
+                ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+                ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
+                
+                if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
+                    // Extract just the filename from the path
+                    WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
+                    PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
+                    
+                    // Convert wide char to char (ASCII only)
+                    for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                        CallbackArray[count].ModuleName[c] = (CHAR)FileNameOnly[c];
+                    }
+                    
+                    // Set callback name based on offset from module base
+                    sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                             "ThreadCallback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
+                    
+                    found = TRUE;
+                    break;
+                }
+            }
+        }
+        
+        // If module not found, use generic name
+        if (!found) {
+            RtlCopyMemory(CallbackArray[count].ModuleName, "Unknown", sizeof("Unknown"));
+            sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                     "ThreadCallback@0x%p", actualCallback);
+        }
+        
+        count++;
+    }
+    
+    *FoundCallbacks = count;
+    DbgPrint("[elemetry] EnumerateCreateThreadCallbacks: Found %u callbacks\n", count);
+    
+    ExFreePoolWithTag(callbackPointers, 'CBpT');
+    return status;
+}
+
+// Implement the missing EnumerateRegistryCallbacks function
+NTSTATUS EnumerateRegistryCallbacks(
+    _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    *FoundCallbacks = 0;
+    
+    // If user didn't provide a table address, we can't proceed
+    if (!CallbackTable) {
+        DbgPrint("[elemetry] EnumerateRegistryCallbacks: No callback list head provided\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+    
+    DbgPrint("[elemetry] EnumerateRegistryCallbacks: Using callback list at %p\n", CallbackTable);
+    
+    // Registry callbacks are stored in a linked list, not an array
+    // First, read the list head
+    LIST_ENTRY listHead = {0};
+    SIZE_T bytesRead = 0;
+    
+    status = ReadProtectedKernelMemory(CallbackTable, &listHead, sizeof(LIST_ENTRY), &bytesRead);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[elemetry] EnumerateRegistryCallbacks: Failed to read list head: 0x%X\n", status);
+        return status;
+    }
+    
+    // Define the structure of a registry callback entry (from TelemetrySourcerer)
+    typedef struct _CM_CALLBACK_ENTRY {
+        LIST_ENTRY ListEntry;
+        ULONG Unknown1;
+        ULONG Unknown2;
+        LARGE_INTEGER Cookie;
+        PVOID Context;
+        PVOID Function;
+    } CM_CALLBACK_ENTRY, *PCM_CALLBACK_ENTRY;
+    
+    // Walk the list
+    LIST_ENTRY currentEntry = listHead;
+    ULONG count = 0;
+    
+    while (currentEntry.Flink != listHead.Flink && count < MaxCallbacks) {
+        // Read the next entry
+        CM_CALLBACK_ENTRY callbackEntry = {0};
+        status = ReadProtectedKernelMemory(currentEntry.Flink, &callbackEntry, sizeof(CM_CALLBACK_ENTRY), &bytesRead);
+        
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] EnumerateRegistryCallbacks: Failed to read list entry: 0x%X\n", status);
+            break;
+        }
+        
+        if (callbackEntry.Function != NULL) {
+            // This is a valid callback, create an entry
+            RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
+            
+            CallbackArray[count].Type = CALLBACK_TYPE::CmRegistry;
+            CallbackArray[count].Address = callbackEntry.Function;
+            CallbackArray[count].Context = (ULONG)(ULONG_PTR)callbackEntry.Context;
+            
+            // Get base address to determine which module this callback belongs to
+            ULONG_PTR callbackAddress = (ULONG_PTR)callbackEntry.Function;
+            BOOLEAN found = FALSE;
+            
+            // Try to find which module this callback belongs to
+            for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+                if (g_FoundModules[m].BaseAddress != NULL) {
+                    ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+                    ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
+                    
+                    if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
+                        // Extract just the filename from the path
+                        WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
+                        PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
+                        
+                        // Convert wide char to char (ASCII only)
+                        for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                            CallbackArray[count].ModuleName[c] = (CHAR)FileNameOnly[c];
+                        }
+                        
+                        // Set callback name based on offset from module base
+                        sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                                 "RegistryCallback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
+                        
+                        found = TRUE;
+                        break;
+                    }
+                }
+            }
+            
+            // If module not found, use generic name
+            if (!found) {
+                RtlCopyMemory(CallbackArray[count].ModuleName, "Unknown", sizeof("Unknown"));
+                sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                         "RegistryCallback@0x%p", callbackEntry.Function);
+            }
+            
+            count++;
+        }
+        
+        // Move to the next entry
+        currentEntry = callbackEntry.ListEntry;
+        
+        // Safety check to prevent infinite loops
+        if (currentEntry.Flink == NULL || currentEntry.Flink == listHead.Flink) {
+            break;
+        }
+    }
+    
+    *FoundCallbacks = count;
+    DbgPrint("[elemetry] EnumerateRegistryCallbacks: Found %u callbacks\n", count);
+    
     return status;
 } 
