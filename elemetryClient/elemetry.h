@@ -28,7 +28,23 @@ enum class CALLBACK_TYPE
     ObProcessHandlePre = 5,
     ObProcessHandlePost = 6,
     ObThreadHandlePre = 7,
-    ObThreadHandlePost = 8
+    ObThreadHandlePost = 8,
+    FsPreCreate = 9,
+    FsPostCreate = 10,
+    FsPreClose = 11,
+    FsPostClose = 12,
+    FsPreRead = 13,
+    FsPostRead = 14,
+    FsPreWrite = 15,
+    FsPostWrite = 16,
+    FsPreQueryInfo = 17,
+    FsPostQueryInfo = 18,
+    FsPreSetInfo = 19,
+    FsPostSetInfo = 20,
+    FsPreDirCtrl = 21,
+    FsPostDirCtrl = 22,
+    FsPreFsCtrl = 23,
+    FsPostFsCtrl = 24
     // Add more as needed
 };
 
@@ -86,6 +102,7 @@ typedef enum _CALLBACK_TABLE_TYPE {
     CallbackTableCreateProcess,
     CallbackTableCreateThread,
     CallbackTableRegistry,
+    CallbackTableFilesystem, // Minifilter callbacks
     CallbackTableMax
 } CALLBACK_TABLE_TYPE;
 

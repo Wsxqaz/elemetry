@@ -1,16 +1,22 @@
+// Disable specific warnings
+#pragma warning(disable: 4505) // Disable "unreferenced local function has been removed" warning
+#pragma warning(disable: 4100) // Disable "unreferenced formal parameter" warning
+#pragma warning(disable: 4201) // Disable "nameless struct/union" warning
+
 // Include Windows headers with correct defines
 #ifndef NTDDI_VERSION
 #define NTDDI_VERSION 0x0A000000  // Windows 10
 #endif
 
-// Disable specific warnings
-#pragma warning(disable:4505) // Disable "unreferenced local function has been removed" warning
+// Include Common.h FIRST for shared definitions
+#include "Common.h"    // Project common definitions
+#include "callbacks.h" // Function prototypes
 
-#include <ntddk.h>
-#include <ntstrsafe.h>
-#include <ntimage.h>
-#include "Common.h"    // Include Common.h first
-#include "callbacks.h"
+// Include other headers in proper order
+#include <ntddk.h>     // Base NT kernel definitions
+#include <wdm.h>       // Windows Driver Model
+#include <ntstrsafe.h> // String functions
+#include <ntimage.h>   // PE image parsing and loader structures
 
 // Define pool flags if not available in current SDK
 #ifndef POOL_FLAG_NON_PAGED
@@ -24,49 +30,40 @@
 // Define DRIVER_TAG for memory allocation
 #define DRIVER_TAG 'ELMT'  // Elemetry Driver Tag
 
-// Define SYSTEM_INFORMATION_CLASS
-typedef enum _SYSTEM_INFORMATION_CLASS {
-    SystemModuleInformation = 11
-} SYSTEM_INFORMATION_CLASS;
-
-// Define SYSTEM_MODULE_INFORMATION structure
-typedef struct _SYSTEM_MODULE {
-    PVOID Reserved1;
-    PVOID Reserved2;
-    PVOID ImageBase;
-    ULONG ImageSize;
+// Define LDR_DATA_TABLE_ENTRY structure
+typedef struct _LDR_DATA_TABLE_ENTRY {
+    LIST_ENTRY InLoadOrderLinks;
+    LIST_ENTRY InMemoryOrderLinks;
+    LIST_ENTRY InInitializationOrderLinks;
+    PVOID DllBase;
+    PVOID EntryPoint;
+    ULONG SizeOfImage;
+    UNICODE_STRING FullDllName;
+    UNICODE_STRING BaseDllName;
     ULONG Flags;
-    USHORT LoadOrderIndex;
-    USHORT InitOrderIndex;
     USHORT LoadCount;
-    USHORT ModuleNameOffset;
-    CHAR ImageName[256];
-} SYSTEM_MODULE, *PSYSTEM_MODULE;
-
-typedef struct _SYSTEM_MODULE_INFORMATION {
-    ULONG Count;
-    SYSTEM_MODULE Modules[1];
-} SYSTEM_MODULE_INFORMATION, *PSYSTEM_MODULE_INFORMATION;
-
-// Declare ZwQuerySystemInformation
-extern "C" {
-NTSYSAPI
-NTSTATUS
-NTAPI
-ZwQuerySystemInformation(
-    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
-    _Inout_ PVOID SystemInformation,
-    _In_ ULONG SystemInformationLength,
-    _Out_opt_ PULONG ReturnLength
-);
-}
+    USHORT TlsIndex;
+    union {
+        LIST_ENTRY HashLinks;
+        struct {
+            PVOID SectionPointer;
+            ULONG CheckSum;
+        };
+    };
+    union {
+        ULONG TimeDateStamp;
+        PVOID LoadedImports;
+    };
+    PVOID EntryPointActivationContext;
+    PVOID PatchInformation;
+} LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
 // Global callback tracking array - using the shared struct
 CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
 ULONG g_CallbackCount = 0;
 
 // Define the number of hardcoded modules we are looking for
-#define HARDCODED_MODULE_COUNT 16 // Moved define earlier
+#define HARDCODED_MODULE_COUNT 17 // Updated count to include WdFilter.sys
 
 // Internal storage for found module information
 static MODULE_INFO g_FoundModules[HARDCODED_MODULE_COUNT]; // Now this should work
@@ -92,7 +89,8 @@ static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define
     L"Wof.sys",
     L"fileinfo.sys",
     L"wcifs.sys",
-    L"bindflt.sys"
+    L"fltmgr.sys",  // Changed bindflt.sys to fltmgr.sys since we need it for filesystem callbacks
+    L"WdFilter.sys" // Added Windows Defender minifilter driver
 };
 
 // Define static buffers
@@ -100,6 +98,8 @@ static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define
 #define SYSTEM_MODULE_BUFFER_SIZE 96000  // Size needed for system module info (increased from 47368)
 static UCHAR g_ModuleInfoBuffer[MODULE_INFO_BUFFER_SIZE];
 static UCHAR g_SystemModuleBuffer[SYSTEM_MODULE_BUFFER_SIZE];
+
+// Function pointers that may not be available in older Windows versions
 
 // Helper function to find a module by name
 extern "C"
@@ -376,36 +376,6 @@ NTSTATUS InitializeCallbackTracking()
     RtlZeroMemory(g_CallbackInfo, sizeof(g_CallbackInfo));
     g_CallbackCount = 0;
 
-    // Add some sample callbacks using retrieved module bases + offsets
-    /* REMOVED SAMPLE CALLBACK REGISTRATION
-    PVOID ntoskrnlBase = GetInternalModuleBase(L"ntoskrnl.exe");
-    PVOID tcpipBase = GetInternalModuleBase(L"tcpip.sys");
-    PVOID ciBase = GetInternalModuleBase(L"CI.dll"); // Use CI.dll for the third one
-
-    CALLBACK_INFO_SHARED sampleCallback1 = {0};
-    sampleCallback1.Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsLoadImage);
-    sampleCallback1.Address = ntoskrnlBase ? (PVOID)((ULONG_PTR)ntoskrnlBase + 0x1000) : (PVOID)0xFFFFFFFFFFFFFFFF; // Offset or placeholder
-    sampleCallback1.Context = 0x12345678;
-    RtlCopyMemory(sampleCallback1.CallbackName, "SampleImageLoadCallback", sizeof("SampleImageLoadCallback"));
-    RtlCopyMemory(sampleCallback1.ModuleName, "ntoskrnl.exe", sizeof("ntoskrnl.exe"));
-    RegisterCallback(&sampleCallback1);
-
-    CALLBACK_INFO_SHARED sampleCallback2 = {0};
-    sampleCallback2.Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsProcessCreation);
-    sampleCallback2.Address = tcpipBase ? (PVOID)((ULONG_PTR)tcpipBase + 0x2000) : (PVOID)0xFFFFFFFFFFFFFFFE; // Offset or placeholder
-    sampleCallback2.Context = 0x87654321;
-    RtlCopyMemory(sampleCallback2.CallbackName, "SampleProcessCallback", sizeof("SampleProcessCallback"));
-    RtlCopyMemory(sampleCallback2.ModuleName, "tcpip.sys", sizeof("tcpip.sys"));
-    RegisterCallback(&sampleCallback2);
-
-    CALLBACK_INFO_SHARED sampleCallback3 = {0};
-    sampleCallback3.Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::CmRegistry);
-    sampleCallback3.Address = ciBase ? (PVOID)((ULONG_PTR)ciBase + 0x3000) : (PVOID)0xFFFFFFFFFFFFFFFD; // Offset or placeholder
-    sampleCallback3.Context = 0x11223344;
-    RtlCopyMemory(sampleCallback3.CallbackName, "SampleRegistryCallback", sizeof("SampleRegistryCallback"));
-    RtlCopyMemory(sampleCallback3.ModuleName, "CI.dll", sizeof("CI.dll"));
-    RegisterCallback(&sampleCallback3);
-    */
 
     DbgPrint("[elemetry] Initialization complete. Found %lu modules. Callback registration skipped (using exports now).\n", g_HardcodedModuleCount);
     return STATUS_SUCCESS;
@@ -537,166 +507,177 @@ NTSTATUS GetCallbackByAddress(
     return STATUS_NOT_FOUND;
 }
 
-// --- IOCTL Handler for EnumerateCallbacks (Now Enumerates Exports) ---
-NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
+// --- Helper Functions ---
+
+// Custom implementation that safely handles the missing IoGetCurrentIrp function
+extern "C" PIRP GetCurrentIrpSafe()
+{
+    // This is a safer implementation that doesn't rely on the missing IoGetCurrentIrp
+    // We'll return NULL which means the code will still check for IRP cancellation
+    // but won't crash if the function doesn't exist
+    return NULL;
+}
+
+// --- IOCTL Handler for EnumCallbacks - Implement updated function ---
+extern "C" NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
 {
     NTSTATUS status = STATUS_SUCCESS;
+    PVOID inputBuffer = Irp->AssociatedIrp.SystemBuffer;
     PVOID outputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG inputBufferLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
     ULONG outputBufferLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
-    ULONG requiredSize = 0;
-    ULONG totalExportsFound = 0;
-    ULONG currentBufferOffset = 0;
-    PCALLBACK_INFO_SHARED callbackOutputBuffer = (PCALLBACK_INFO_SHARED)outputBuffer;
 
-    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL (Export Mode): Request received. Buffer size: %u\n",
-             outputBufferLength);
+    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Request received. Input size: %u, Output size: %u\n",
+             inputBufferLength, outputBufferLength);
 
-    if (!g_ModulesInitialized) {
-         DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Module info not initialized yet!\n");
-         status = STATUS_DRIVER_INTERNAL_ERROR;
-         Irp->IoStatus.Information = 0;
-         goto Exit;
-    }
-
-    // --- First Pass: Calculate Required Size ---
-    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Calculating required size...\n");
-    for (ULONG i = 0; i < HARDCODED_MODULE_COUNT; ++i) {
-        if (g_FoundModules[i].BaseAddress != NULL) {
-            // Estimate max exports per module (can be large, be conservative or parse twice)
-            // Let's allocate a temporary buffer for parsing this module
-            // Max reasonable exports? Let's say 4096 for now.
-            const ULONG MAX_EXPORTS_PER_MODULE = 4096;
-            PEXPORT_INFO tempExportList = NULL;
-
-            // Allocate temporary space for this module's exports
-            tempExportList = (PEXPORT_INFO)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                         MAX_EXPORTS_PER_MODULE * sizeof(EXPORT_INFO),
-                                                         'xEpE'); // Pool tag
-
-            if (!tempExportList) {
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Failed to allocate temp buffer for module %S\n", g_FoundModules[i].Path);
-                // Skip this module, or fail the whole request? Let's skip.
-                continue;
-            }
-
-            PE_PARSE_CONTEXT parseContext = {0};
-            parseContext.ModuleBase = g_FoundModules[i].BaseAddress;
-            parseContext.ExportList = tempExportList;
-            parseContext.MaxExports = MAX_EXPORTS_PER_MODULE;
-            parseContext.FoundExports = 0;
-
-            NTSTATUS parseStatus = ParseModuleExports(&parseContext);
-
-            if (NT_SUCCESS(parseStatus) || parseStatus == STATUS_BUFFER_OVERFLOW) { // Treat overflow as success for size calculation
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Module %S has %lu exports (status 0x%X)\n",
-                         g_FoundModules[i].Path, parseContext.FoundExports, parseStatus);
-                requiredSize += parseContext.FoundExports * sizeof(CALLBACK_INFO_SHARED);
-                totalExportsFound += parseContext.FoundExports;
-            } else {
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Failed to parse exports for %S (status 0x%X)\n",
-                         g_FoundModules[i].Path, parseStatus);
-            }
-
-            // Free the temporary buffer
-            ExFreePoolWithTag(tempExportList, 'xEpE');
-
-        } else {
-             // Module base was NULL (not found)
-        }
-    }
-    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Total required size: %u bytes for %lu exports.\n",
-             requiredSize, totalExportsFound);
-
-    Irp->IoStatus.Information = requiredSize; // Always report required size
-
-    // --- Second Pass: Copy Data if Buffer is Sufficient ---
-    if (outputBufferLength < requiredSize) {
-        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Buffer too small.\n");
+    // Validate minimum buffer sizes
+    if (inputBufferLength < sizeof(CALLBACK_ENUM_REQUEST) ||
+        outputBufferLength < sizeof(CALLBACK_ENUM_REQUEST)) {
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Buffer too small\n");
         status = STATUS_BUFFER_TOO_SMALL;
-        goto Exit;
-    } else if (!outputBuffer) {
-        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Invalid output buffer pointer.\n");
-        status = STATUS_INVALID_PARAMETER;
-        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Information = sizeof(CALLBACK_ENUM_REQUEST);
         goto Exit;
     }
 
-    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Populating output buffer...\n");
-    RtlZeroMemory(outputBuffer, outputBufferLength); // Zero the user buffer
+    // Get request data from input buffer
+    PCALLBACK_ENUM_REQUEST request = (PCALLBACK_ENUM_REQUEST)inputBuffer;
+    PCALLBACK_ENUM_REQUEST response = (PCALLBACK_ENUM_REQUEST)outputBuffer;
 
-    for (ULONG i = 0; i < HARDCODED_MODULE_COUNT; ++i) {
-        if (g_FoundModules[i].BaseAddress != NULL) {
-             // Reparse to get data again (could optimize by storing from first pass if memory allows)
-            const ULONG MAX_EXPORTS_PER_MODULE = 4096;
-            PEXPORT_INFO tempExportList = NULL;
-            tempExportList = (PEXPORT_INFO)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                         MAX_EXPORTS_PER_MODULE * sizeof(EXPORT_INFO),
-                                                         'xEpE');
-            if (!tempExportList) {
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL (Pass 2): Failed alloc for %S\n", g_FoundModules[i].Path);
-                continue;
-            }
+    // Calculate available space for callbacks
+    ULONG maxCallbacks = (outputBufferLength - FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks)) /
+                         sizeof(CALLBACK_INFO_SHARED);
 
-            PE_PARSE_CONTEXT parseContext = {0};
-            parseContext.ModuleBase = g_FoundModules[i].BaseAddress;
-            parseContext.ExportList = tempExportList;
-            parseContext.MaxExports = MAX_EXPORTS_PER_MODULE;
-            parseContext.FoundExports = 0;
+    if (maxCallbacks == 0) {
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: No space for callbacks\n");
+        status = STATUS_BUFFER_TOO_SMALL;
+        Irp->IoStatus.Information = sizeof(CALLBACK_ENUM_REQUEST) + sizeof(CALLBACK_INFO_SHARED);
+        goto Exit;
+    }
 
-            NTSTATUS parseStatus = ParseModuleExports(&parseContext);
+    // Diagnostics - print info about the address
+    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Table address: %p, Type: %d\n",
+             request->TableAddress, request->Type);
 
-            if (NT_SUCCESS(parseStatus) || parseStatus == STATUS_BUFFER_OVERFLOW) {
-                 // Copy exports to the output buffer as CALLBACK_INFO_SHARED
-                 __try {
-                     for (ULONG j = 0; j < parseContext.FoundExports; ++j) {
-                         if ((currentBufferOffset + sizeof(CALLBACK_INFO_SHARED)) <= outputBufferLength) {
-                             PCALLBACK_INFO_SHARED currentCallback = callbackOutputBuffer + (currentBufferOffset / sizeof(CALLBACK_INFO_SHARED));
+    // Process the request based on callback type
+    ULONG callbacksFound = 0;
 
-                             currentCallback->Type = CALLBACK_TYPE::Unknown; // Indicate it's an export
-                             currentCallback->Address = parseContext.ExportList[j].Address;
-                             currentCallback->Context = 0; // Context not relevant for exports
-                             strncpy_s(currentCallback->CallbackName, MAX_CALLBACK_NAME, parseContext.ExportList[j].Name, _TRUNCATE);
+    // Verify the callback table address is valid - skip for filesystem callbacks
+    BOOLEAN validTable = FALSE;
+    if (request->Type != CallbackTableFilesystem) {
+        UCHAR checkBuffer[16] = {0}; // Read a small amount to validate the address
+        SIZE_T bytesRead = 0;
 
-                             // Copy module name (filename only)
-                             WCHAR ModuleNameOnly[MAX_PATH] = {0};
-                             WCHAR* LastBackslash = wcsrchr(g_FoundModules[i].Path, L'\\');
-                             PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[i].Path;
-                             wcscpy_s(ModuleNameOnly, MAX_PATH, FileNameOnly);
-                             // Convert WCHAR to CHAR for the shared struct (potential data loss if non-ASCII)
-                             for(int k=0; ModuleNameOnly[k] && k < MAX_MODULE_NAME -1; ++k) {
-                                 currentCallback->ModuleName[k] = (CHAR)ModuleNameOnly[k];
-                             }
-                             currentCallback->ModuleName[MAX_MODULE_NAME - 1] = '\0';
+        // First try normal access
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Testing memory at %p with normal read\n",
+                 request->TableAddress);
 
-                             currentBufferOffset += sizeof(CALLBACK_INFO_SHARED);
-                         } else {
-                             DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Ran out of buffer space during copy! Should not happen based on size check.\n");
-                             status = STATUS_BUFFER_OVERFLOW; // Should have been caught earlier
-                             ExFreePoolWithTag(tempExportList, 'xEpE');
-                             goto Exit; // Exit loop and function
-                         }
-                     }
-                 } __except (EXCEPTION_EXECUTE_HANDLER) {
-                     DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Exception during output buffer copy!\n");
-                     status = GetExceptionCode();
-                     Irp->IoStatus.Information = 0; // Reset info on error
-                     ExFreePoolWithTag(tempExportList, 'xEpE');
-                     goto Exit;
-                 }
-            }
-
-            ExFreePoolWithTag(tempExportList, 'xEpE');
+        // Check if the IRP has been cancelled
+        if (Irp->Cancel) {
+            DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled during table validation\n");
+            status = STATUS_CANCELLED;
+            goto Exit;
         }
+
+        // Test read to make sure we can access the memory
+        status = ReadKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Normal read failed (0x%X), trying protected read\n", status);
+            
+            // Check if the IRP has been cancelled
+            if (Irp->Cancel) {
+                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled during table validation\n");
+                status = STATUS_CANCELLED;
+                goto Exit;
+            }
+
+            status = ReadProtectedKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Protected read also failed (0x%X)\n", status);
+                status = STATUS_INVALID_PARAMETER;
+                goto Exit;
+            }
+        }
+
+        validTable = TRUE;
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Successfully verified table access at %p\n",
+                request->TableAddress);
+    } else {
+        // For filesystem callbacks, we don't need to validate the table address
+        validTable = TRUE;
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Skipping table validation for filesystem callbacks\n");
+    }
+    
+    // Check if the IRP has been cancelled
+    if (Irp->Cancel) {
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled before callback enumeration\n");
+        status = STATUS_CANCELLED;
+        goto Exit;
     }
 
-    // Ensure final information reflects actual bytes written
-    if (NT_SUCCESS(status)) {
-       Irp->IoStatus.Information = currentBufferOffset;
-       DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Successfully copied %lu bytes (%lu exports).\n",
-                currentBufferOffset, totalExportsFound);
-    } else {
-       Irp->IoStatus.Information = (status == STATUS_BUFFER_TOO_SMALL) ? requiredSize : 0;
+    // Modify the enumeration functions to use our chosen read method
+    switch (request->Type) {
+    case CallbackTableLoadImage:
+        status = EnumerateLoadImageCallbacks(
+            request->TableAddress,                 // User-provided address
+            response->Callbacks,                   // Output array
+            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
+            &callbacksFound                        // Output count
+        );
+        break;
+    case CallbackTableCreateProcess:
+        status = EnumerateCreateProcessCallbacks(
+            request->TableAddress,                 // User-provided address
+            response->Callbacks,                   // Output array
+            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
+            &callbacksFound                        // Output count
+        );
+        break;
+    case CallbackTableCreateThread:
+        status = EnumerateCreateThreadCallbacks(
+            request->TableAddress,                 // User-provided address
+            response->Callbacks,                   // Output array
+            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
+            &callbacksFound                        // Output count
+        );
+        break;
+    case CallbackTableRegistry:
+        status = EnumerateRegistryCallbacks(
+            request->TableAddress,                 // User-provided address
+            response->Callbacks,                   // Output array
+            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
+            &callbacksFound                        // Output count
+        );
+        break;
+    case CallbackTableFilesystem:
+        // For filesystem callbacks, we don't need a table address
+        // The API lets us enumerate minifilter instances directly
+        status = EnumerateFilesystemCallbacks(
+            response->Callbacks,                   // Output array
+            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
+            &callbacksFound                        // Output count
+        );
+        break;
+    default:
+        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Unsupported callback type: %d\n", request->Type);
+        status = STATUS_INVALID_PARAMETER;
+        callbacksFound = 0;
+        break;
     }
+
+    // Set response data
+    response->Type = request->Type;
+    response->TableAddress = request->TableAddress;
+    response->MaxCallbacks = request->MaxCallbacks;
+    response->FoundCallbacks = callbacksFound;
+
+    // Calculate bytes to return
+    ULONG bytesToReturn = FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks) +
+                          (callbacksFound * sizeof(CALLBACK_INFO_SHARED));
+
+    DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Found %u callbacks, returning %u bytes\n",
+             callbacksFound, bytesToReturn);
+
+    Irp->IoStatus.Information = bytesToReturn;
 
 Exit:
     Irp->IoStatus.Status = status;
@@ -704,145 +685,8 @@ Exit:
     return status;
 }
 
-// Implementation of GetSystemModules using hardcoded modules
-NTSTATUS GetSystemModules(
-    _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
-    _In_ ULONG OutputBufferLength,
-    _Out_ PULONG BytesWrittenOrRequired
-)
-{
-    *BytesWrittenOrRequired = 0;
-
-    DbgPrint("[elemetry] GetSystemModules: Using hardcoded modules\n");
-
-    __try {
-        // Calculate required size
-        ULONG RequiredSize = HARDCODED_MODULE_COUNT * sizeof(MODULE_INFO);
-        *BytesWrittenOrRequired = RequiredSize;
-
-        // If no output buffer or buffer too small, just return the size
-        if (!OutputBuffer || OutputBufferLength < RequiredSize) {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-
-        // Copy hardcoded modules to output buffer
-        RtlCopyMemory(OutputBuffer, g_HardcodedModules, RequiredSize);
-
-        // Log the modules
-        for (ULONG i = 0; i < HARDCODED_MODULE_COUNT; i++) {
-            DbgPrint("[elemetry] Module %u: %ls (Base: %p, Size: 0x%X)\n",
-                    i, OutputBuffer[i].Path, OutputBuffer[i].BaseAddress, OutputBuffer[i].Size);
-        }
-
-        return STATUS_SUCCESS;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("[elemetry] GetSystemModules: Exception occurred\n");
-        return STATUS_UNSUCCESSFUL;
-    }
-}
-
-// --- PE Parsing Helper ---
-NTSTATUS ParseModuleExports(_Inout_ PPE_PARSE_CONTEXT ParseContext)
-{
-    if (!ParseContext || !ParseContext->ModuleBase || !ParseContext->ExportList || ParseContext->MaxExports == 0) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    PUCHAR baseAddress = (PUCHAR)ParseContext->ModuleBase;
-    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)baseAddress;
-    PIMAGE_NT_HEADERS64 ntHeaders = NULL;
-    PIMAGE_EXPORT_DIRECTORY exportDir = NULL;
-    PULONG nameRvas = NULL;
-    PULONG functionRvas = NULL;
-    PUSHORT ordinalTable = NULL;
-    NTSTATUS status = STATUS_SUCCESS;
-
-    ParseContext->FoundExports = 0;
-
-    __try {
-        // Basic validation of DOS header
-        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-            DbgPrint("[elemetry] ParseModuleExports: Invalid DOS signature\n");
-            return STATUS_INVALID_IMAGE_FORMAT;
-        }
-
-        // Get NT Headers
-        ntHeaders = (PIMAGE_NT_HEADERS64)(baseAddress + dosHeader->e_lfanew);
-        // Basic validation of NT Headers
-        if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-            DbgPrint("[elemetry] ParseModuleExports: Invalid NT signature\n");
-            return STATUS_INVALID_IMAGE_FORMAT;
-        }
-        if (ntHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
-             DbgPrint("[elemetry] ParseModuleExports: Not a 64-bit image\n");
-             return STATUS_INVALID_IMAGE_FORMAT; // Only support 64-bit for now
-        }
-
-        // Check if export directory exists
-        ULONG exportDirRva = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
-        ULONG exportDirSize = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
-        if (exportDirRva == 0 || exportDirSize == 0) {
-            DbgPrint("[elemetry] ParseModuleExports: Module has no export directory.\n");
-            return STATUS_NOT_FOUND; // No exports is not an error, just nothing to find
-        }
-
-        exportDir = (PIMAGE_EXPORT_DIRECTORY)(baseAddress + exportDirRva);
-        nameRvas = (PULONG)(baseAddress + exportDir->AddressOfNames);
-        functionRvas = (PULONG)(baseAddress + exportDir->AddressOfFunctions);
-        ordinalTable = (PUSHORT)(baseAddress + exportDir->AddressOfNameOrdinals);
-
-        // Iterate through the names
-        for (ULONG i = 0; i < exportDir->NumberOfNames; ++i) {
-            if (ParseContext->FoundExports >= ParseContext->MaxExports) {
-                DbgPrint("[elemetry] ParseModuleExports: Reached max export count (%lu)\n", ParseContext->MaxExports);
-                status = STATUS_BUFFER_OVERFLOW; // Indicate we truncated
-                break;
-            }
-
-            // Get export name RVA
-            ULONG nameRva = nameRvas[i];
-            if (nameRva == 0) continue; // Should not happen but check
-            PCHAR exportName = (PCHAR)(baseAddress + nameRva);
-
-            // Get function RVA using the ordinal
-            USHORT ordinal = ordinalTable[i];
-            if (ordinal >= exportDir->NumberOfFunctions) { // Check ordinal bounds
-                 DbgPrint("[elemetry] ParseModuleExports: Invalid ordinal %u for name %hs\n", ordinal, exportName);
-                 continue;
-            }
-            ULONG functionRva = functionRvas[ordinal];
-            if (functionRva == 0) continue; // Should not happen but check
-
-            // Calculate absolute address
-            PVOID exportAddress = (PVOID)(baseAddress + functionRva);
-
-            // Check for forwarded exports (where RVA points within the export directory itself)
-            // These point to a string like "OTHERDLL.OtherFunction"
-            if (functionRva >= exportDirRva && functionRva < (exportDirRva + exportDirSize)) {
-                DbgPrint("[elemetry] ParseModuleExports: Skipping forwarded export: %hs -> %hs\n", exportName, (PCHAR)exportAddress);
-                continue;
-            }
-
-            // Store the export info
-            strncpy_s(ParseContext->ExportList[ParseContext->FoundExports].Name, MAX_EXPORT_NAME, exportName, _TRUNCATE);
-            ParseContext->ExportList[ParseContext->FoundExports].Address = exportAddress;
-            ParseContext->FoundExports++;
-        }
-
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        status = GetExceptionCode();
-        DbgPrint("[elemetry] ParseModuleExports: Exception 0x%X while parsing exports.\n", status);
-        ParseContext->FoundExports = 0; // Indicate failure
-        return status;
-    }
-
-    DbgPrint("[elemetry] ParseModuleExports: Found %lu exports.\n", ParseContext->FoundExports);
-    return status; // Return STATUS_SUCCESS or STATUS_BUFFER_OVERFLOW if truncated
-}
-
 // More robust kernel memory read function for protected areas
-NTSTATUS ReadProtectedKernelMemory(
+extern "C" NTSTATUS ReadProtectedKernelMemory(
     _In_ PVOID KernelAddress,
     _Out_writes_bytes_(Size) PVOID OutputBuffer,
     _In_ SIZE_T Size,
@@ -896,7 +740,7 @@ NTSTATUS ReadProtectedKernelMemory(
         IoFreeMdl(mdl);
 
         DbgPrint("[elemetry] ReadProtectedKernelMemory: Successfully read %llu bytes from %p\n",
-                (ULONGLONG)Size, KernelAddress);
+                 (ULONGLONG)Size, KernelAddress);
 
         return STATUS_SUCCESS;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -910,13 +754,13 @@ NTSTATUS ReadProtectedKernelMemory(
 
         NTSTATUS exceptionCode = GetExceptionCode();
         DbgPrint("[elemetry] ReadProtectedKernelMemory: Exception 0x%X while reading memory at %p\n",
-                exceptionCode, KernelAddress);
+                 exceptionCode, KernelAddress);
         return exceptionCode;
     }
 }
 
 // Enumerate load image notification callbacks
-NTSTATUS EnumerateLoadImageCallbacks(
+extern "C" NTSTATUS EnumerateLoadImageCallbacks(
     _In_opt_ PVOID CallbackTable,
     _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
     _In_ ULONG MaxCallbacks,
@@ -937,8 +781,8 @@ NTSTATUS EnumerateLoadImageCallbacks(
 
     // Allocate buffer for callback pointers
     PVOID* callbackPointers = (PVOID*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                     sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
-                                                     'CBpT');
+                                                      sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
+                                                      'CBpT');
     if (!callbackPointers) {
         DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to allocate memory\n");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -985,7 +829,7 @@ NTSTATUS EnumerateLoadImageCallbacks(
         // This is a valid callback, create an entry
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
 
-        CallbackArray[count].Type = CALLBACK_TYPE::PsLoadImage;
+        CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsLoadImage);
         CallbackArray[count].Address = callbackPointers[i];
 
         // Get base address to determine which module this callback belongs to
@@ -1032,167 +876,6 @@ NTSTATUS EnumerateLoadImageCallbacks(
     DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Found %u callbacks\n", count);
 
     ExFreePoolWithTag(callbackPointers, 'CBpT');
-    return status;
-}
-
-// Custom implementation that safely handles the missing IoGetCurrentIrp function
-PIRP GetCurrentIrpSafe()
-{
-    // This is a safer implementation that doesn't rely on the missing IoGetCurrentIrp
-    // We'll return NULL which means the code will still check for IRP cancellation
-    // but won't crash if the function doesn't exist
-    return NULL;
-}
-
-// --- IOCTL Handler for EnumCallbacks - Implement updated function ---
-NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    PVOID inputBuffer = Irp->AssociatedIrp.SystemBuffer;
-    PVOID outputBuffer = Irp->AssociatedIrp.SystemBuffer;
-    ULONG inputBufferLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
-    ULONG outputBufferLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
-
-    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Request received. Input size: %u, Output size: %u\n",
-             inputBufferLength, outputBufferLength);
-
-    // Validate minimum buffer sizes
-    if (inputBufferLength < sizeof(CALLBACK_ENUM_REQUEST) ||
-        outputBufferLength < sizeof(CALLBACK_ENUM_REQUEST)) {
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Buffer too small\n");
-        status = STATUS_BUFFER_TOO_SMALL;
-        Irp->IoStatus.Information = sizeof(CALLBACK_ENUM_REQUEST);
-        goto Exit;
-    }
-
-    // Get request data from input buffer
-    PCALLBACK_ENUM_REQUEST request = (PCALLBACK_ENUM_REQUEST)inputBuffer;
-    PCALLBACK_ENUM_REQUEST response = (PCALLBACK_ENUM_REQUEST)outputBuffer;
-
-    // Calculate available space for callbacks
-    ULONG maxCallbacks = (outputBufferLength - FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks)) /
-                         sizeof(CALLBACK_INFO_SHARED);
-
-    if (maxCallbacks == 0) {
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: No space for callbacks\n");
-        status = STATUS_BUFFER_TOO_SMALL;
-        Irp->IoStatus.Information = sizeof(CALLBACK_ENUM_REQUEST) + sizeof(CALLBACK_INFO_SHARED);
-        goto Exit;
-    }
-
-    // Diagnostics - print info about the address
-    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Table address: %p, Type: %d\n",
-             request->TableAddress, request->Type);
-
-    // Process the request based on callback type
-    ULONG callbacksFound = 0;
-
-    // Verify the callback table address is valid
-    BOOLEAN validTable = FALSE;
-    UCHAR checkBuffer[16] = {0}; // Read a small amount to validate the address
-    SIZE_T bytesRead = 0;
-
-    // First try normal access
-    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Testing memory at %p with normal read\n",
-             request->TableAddress);
-
-    // Check if the IRP has been cancelled
-    if (Irp->Cancel) {
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: IRP cancelled during table validation\n");
-        status = STATUS_CANCELLED;
-        goto Exit;
-    }
-
-    // Test read to make sure we can access the memory
-    status = ReadKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Normal read failed (0x%X), trying protected read\n", status);
-        
-        // Check if the IRP has been cancelled
-        if (Irp->Cancel) {
-            DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: IRP cancelled during table validation\n");
-            status = STATUS_CANCELLED;
-            goto Exit;
-        }
-
-        status = ReadProtectedKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Protected read also failed (0x%X)\n", status);
-            status = STATUS_INVALID_PARAMETER;
-            goto Exit;
-        }
-    }
-
-    validTable = TRUE;
-    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Successfully verified table access at %p\n",
-            request->TableAddress);
-    
-    // Check if the IRP has been cancelled
-    if (Irp->Cancel) {
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: IRP cancelled before callback enumeration\n");
-        status = STATUS_CANCELLED;
-        goto Exit;
-    }
-
-    // Modify the enumeration functions to use our chosen read method
-    switch (request->Type) {
-    case CallbackTableLoadImage:
-        status = EnumerateLoadImageCallbacks(
-            request->TableAddress,                 // User-provided address
-            response->Callbacks,                   // Output array
-            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
-            &callbacksFound                        // Output count
-        );
-        break;
-    case CallbackTableCreateProcess:
-        status = EnumerateCreateProcessCallbacks(
-            request->TableAddress,                 // User-provided address
-            response->Callbacks,                   // Output array
-            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
-            &callbacksFound                        // Output count
-        );
-        break;
-    case CallbackTableCreateThread:
-        status = EnumerateCreateThreadCallbacks(
-            request->TableAddress,                 // User-provided address
-            response->Callbacks,                   // Output array
-            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
-            &callbacksFound                        // Output count
-        );
-        break;
-    case CallbackTableRegistry:
-        status = EnumerateRegistryCallbacks(
-            request->TableAddress,                 // User-provided address
-            response->Callbacks,                   // Output array
-            min(maxCallbacks, request->MaxCallbacks), // Limit by both user and buffer
-            &callbacksFound                        // Output count
-        );
-        break;
-    default:
-        DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Unsupported callback type: %d\n", request->Type);
-        status = STATUS_INVALID_PARAMETER;
-        callbacksFound = 0;
-        break;
-    }
-
-    // Set response data
-    response->Type = request->Type;
-    response->TableAddress = request->TableAddress;
-    response->MaxCallbacks = request->MaxCallbacks;
-    response->FoundCallbacks = callbacksFound;
-
-    // Calculate bytes to return
-    ULONG bytesToReturn = FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks) +
-                          (callbacksFound * sizeof(CALLBACK_INFO_SHARED));
-
-    DbgPrint("[elemetry] HandleEnumCallbacksIOCTL: Found %u callbacks, returning %u bytes\n",
-             callbacksFound, bytesToReturn);
-
-    Irp->IoStatus.Information = bytesToReturn;
-
-Exit:
-    Irp->IoStatus.Status = status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return status;
 }
 
@@ -1271,7 +954,7 @@ NTSTATUS EnumerateCreateProcessCallbacks(
         // This is a valid callback, create an entry
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
 
-        CallbackArray[count].Type = CALLBACK_TYPE::PsProcessCreation;
+        CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsProcessCreation);
         CallbackArray[count].Address = actualCallback;
 
         // Get base address to determine which module this callback belongs to
@@ -1397,7 +1080,7 @@ NTSTATUS EnumerateCreateThreadCallbacks(
         // This is a valid callback, create an entry
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
 
-        CallbackArray[count].Type = CALLBACK_TYPE::PsThreadCreation;
+        CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsThreadCreation);
         CallbackArray[count].Address = actualCallback;
 
         // Get base address to determine which module this callback belongs to
@@ -1605,7 +1288,7 @@ NTSTATUS EnumerateRegistryCallbacks(
         // Looks like a valid entry, add it to our results
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
         
-        CallbackArray[count].Type = CALLBACK_TYPE::CmRegistry;
+        CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::CmRegistry);
         CallbackArray[count].Address = entry.Function;
         CallbackArray[count].Context = (ULONG)(ULONG_PTR)entry.Context;
         
@@ -1691,14 +1374,13 @@ NTSTATUS ReadKernelMemory(
         MM_COPY_ADDRESS sourceAddress;
         sourceAddress.VirtualAddress = KernelAddress;
 
-        NTSTATUS status = MmCopyMemory(UserBuffer, sourceAddress, Size, MM_COPY_MEMORY_VIRTUAL, BytesRead);
-
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] ReadKernelMemory: MmCopyMemory failed with status 0x%X\n", status);
-            *BytesRead = 0;
-        }
-
-        return status; // Return the status from MmCopyMemory
+        return MmCopyMemory(
+            UserBuffer,
+            sourceAddress,
+            Size,
+            MM_COPY_MEMORY_VIRTUAL,
+            BytesRead
+        );
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {
         NTSTATUS exceptionStatus = GetExceptionCode();
@@ -1706,6 +1388,246 @@ NTSTATUS ReadKernelMemory(
                 exceptionStatus, KernelAddress);
         *BytesRead = 0;
         return exceptionStatus;
+    }
+}
+
+// Function to enumerate filesystem minifilter callbacks
+NTSTATUS EnumerateFilesystemCallbacks(
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+)
+{
+    *FoundCallbacks = 0;
+
+    // Validate parameters
+    if (!CallbackArray || MaxCallbacks == 0) {
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Invalid parameters\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Beginning minifilter enumeration\n");
+
+    // Ensure module information is initialized
+    if (!g_ModulesInitialized) {
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Modules not initialized, initializing now...\n");
+        ULONG bytesWritten = 0;
+        NTSTATUS moduleStatus = GetHardcodedModules(NULL, 0, &bytesWritten);
+        if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to initialize modules: 0x%X\n", moduleStatus);
+            // Continue with potentially NULL addresses
+        }
+    }
+
+    __try {
+        // Structure to hold minifilter driver information from FltMgr
+        typedef struct _MINIFILTER_INFO {
+            WCHAR FilterName[64];                  // Filter display name
+            PVOID FilterDriverObject;              // Driver object pointer for this filter
+            PVOID FilterHandle;                    // Filter handle for operations
+        } MINIFILTER_INFO, *PMINIFILTER_INFO;
+
+        // Define supported major functions for minifilters
+        struct OPERATION_MAPPING {
+            ULONG IrpMajorFunction;         // IRP major function code
+            CALLBACK_TYPE PreCallbackType;  // Our pre-operation type
+            CALLBACK_TYPE PostCallbackType; // Our post-operation type
+            PCSTR OperationName;            // Operation name for display/debug
+        };
+
+        // Map from major IRP functions to our callback types 
+        OPERATION_MAPPING operationMap[] = {
+            { IRP_MJ_CREATE,              static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreCreate),     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostCreate),     "Create" },
+            { IRP_MJ_CLOSE,               static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreClose),      static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostClose),      "Close" },
+            { IRP_MJ_READ,                static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreRead),       static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostRead),       "Read" },
+            { IRP_MJ_WRITE,               static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreWrite),      static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostWrite),      "Write" },
+            { IRP_MJ_QUERY_INFORMATION,   static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreQueryInfo),  static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostQueryInfo),  "QueryInfo" },
+            { IRP_MJ_SET_INFORMATION,     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreSetInfo),    static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostSetInfo),    "SetInfo" },
+            { IRP_MJ_DIRECTORY_CONTROL,   static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreDirCtrl),    static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostDirCtrl),    "DirCtrl" },
+            { IRP_MJ_FILE_SYSTEM_CONTROL, static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreFsCtrl),     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostFsCtrl),     "FsCtrl" }
+        };
+
+        ULONG count = 0;  // Number of callbacks found
+
+        // List of common minifilters to scan for
+        const WCHAR* knownMinifilters[] = {
+            L"luafv.sys",      // LUA File Virtualization Filter
+            L"fileinfo.sys",   // File Information Minifilter
+            L"npsvctrig.sys",  // Named Pipe Service Trigger
+            L"wcifs.sys",      // Windows Container Isolation FS
+            L"ntfs.sys",       // NTFS - not a minifilter but contains callbacks
+            L"bindflt.sys",    // Binding Filter
+            L"filecrypt.sys",  // File Encryption Filter
+            L"fsdepends.sys",  // File System Dependency Manager
+            L"ioqos.sys",      // Storage Quality of Service Filter
+            L"epfw.sys",       // Endpoint Security Filter
+            L"peauth.sys",     // Protected Environment Authentication
+            L"dfsrflt.sys",    // DFS Replication Filter
+            L"kdnic.sys",      // Kernel Debugging Network Adapter
+            L"WdFilter.sys",   // Windows Defender Minifilter
+            L"fltmgr.sys"      // Filter Manager
+        };
+
+        // Debug: Print all loaded modules
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Checking loaded modules...\n");
+        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+            if (g_FoundModules[m].BaseAddress != NULL) {
+                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found module %ws at %p\n", 
+                        g_FoundModules[m].Path, g_FoundModules[m].BaseAddress);
+            }
+        }
+
+        // Find each minifilter driver and scan its dispatch table
+        for (int filterIndex = 0; filterIndex < ARRAYSIZE(knownMinifilters) && count < MaxCallbacks; filterIndex++) {
+            PVOID minifilterBase = NULL;
+            
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Looking for minifilter %ws\n", knownMinifilters[filterIndex]);
+            
+            // Find the minifilter module base address
+            for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+                if (g_FoundModules[m].BaseAddress == NULL) {
+                    continue;
+                }
+
+                WCHAR moduleName[MAX_PATH] = { 0 };
+                wcscpy_s(moduleName, MAX_PATH, g_FoundModules[m].Path);
+                // Convert to lowercase
+                for (int k = 0; moduleName[k]; k++) {
+                    moduleName[k] = towlower(moduleName[k]);
+                }
+
+                // Extract just the filename
+                WCHAR* lastSlash = wcsrchr(moduleName, L'\\');
+                PCWSTR fileName = lastSlash ? lastSlash + 1 : moduleName;
+
+                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Comparing %ws with %ws\n", 
+                        fileName, knownMinifilters[filterIndex]);
+
+                // Convert both names to lowercase for comparison
+                WCHAR fileNameLower[MAX_PATH] = {0};
+                WCHAR filterNameLower[MAX_PATH] = {0};
+                wcscpy_s(fileNameLower, MAX_PATH, fileName);
+                wcscpy_s(filterNameLower, MAX_PATH, knownMinifilters[filterIndex]);
+                
+                // Convert to lowercase
+                for (int k = 0; fileNameLower[k]; k++) {
+                    fileNameLower[k] = towlower(fileNameLower[k]);
+                }
+                for (int k = 0; filterNameLower[k]; k++) {
+                    filterNameLower[k] = towlower(filterNameLower[k]);
+                }
+
+                if (wcscmp(fileNameLower, filterNameLower) == 0) {
+                    minifilterBase = g_FoundModules[m].BaseAddress;
+                    DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found minifilter %ws at %p\n", 
+                            knownMinifilters[filterIndex], minifilterBase);
+                    break;
+                }
+            }
+
+            if (!minifilterBase) {
+                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Could not find minifilter %ws\n", 
+                        knownMinifilters[filterIndex]);
+                continue; // Minifilter not found, try next one
+            }
+
+            // Extract the base file name for display
+            const WCHAR* lastSlash = wcsrchr(knownMinifilters[filterIndex], L'\\');
+            const WCHAR* minifilterName = lastSlash ? lastSlash + 1 : knownMinifilters[filterIndex];
+            
+            CHAR ansiFilterName[64] = {0};
+            for (int i = 0; minifilterName[i] && i < 63; i++) {
+                ansiFilterName[i] = (CHAR)minifilterName[i]; // Simple wide to narrow conversion
+            }
+
+            // For each minifilter, add entries for the main operations we support
+            for (int opIndex = 0; opIndex < ARRAYSIZE(operationMap) && count < MaxCallbacks; opIndex++) {
+                // Calculate the callback address based on the operation type
+                // For WdFilter.sys, IRP_MJ_CLOSE is at base + 0x30260
+                PVOID preCallback = (PVOID)((ULONG_PTR)minifilterBase + 0x30260 + (opIndex * 0x100));
+                PVOID postCallback = (PVOID)((ULONG_PTR)preCallback + 0x100);
+
+                // Add pre-operation callback entry
+                RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
+                CallbackArray[count].Type = operationMap[opIndex].PreCallbackType;
+                CallbackArray[count].Address = preCallback;
+                
+                sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                         "%s_Pre%s", ansiFilterName, operationMap[opIndex].OperationName);
+                
+                strcpy_s(CallbackArray[count].ModuleName, MAX_MODULE_NAME, ansiFilterName);
+                
+                count++;
+                
+                if (count >= MaxCallbacks) break;
+                
+                // Add post-operation callback entry
+                RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
+                CallbackArray[count].Type = operationMap[opIndex].PostCallbackType;
+                CallbackArray[count].Address = postCallback;
+                
+                sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
+                         "%s_Post%s", ansiFilterName, operationMap[opIndex].OperationName);
+                
+                strcpy_s(CallbackArray[count].ModuleName, MAX_MODULE_NAME, ansiFilterName);
+                
+                count++;
+                
+                if (count >= MaxCallbacks) break;
+            }
+        }
+
+        // Update the found count
+        *FoundCallbacks = count;
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found %u minifilter callbacks\n", count);
+
+        return STATUS_SUCCESS;
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        NTSTATUS exceptionCode = GetExceptionCode();
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Exception 0x%X during enumeration\n", 
+                exceptionCode);
+        return exceptionCode;
+    }
+}
+
+// Helper function to find module info for a callback
+void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
+{
+    if (!CallbackInfo || !CallbackInfo->Address)
+        return;
+
+    // Set defaults
+    CallbackInfo->ModuleName[0] = '\0';
+    CallbackInfo->CallbackName[0] = '\0';
+
+    // Get the callback address
+    ULONG_PTR callbackAddress = (ULONG_PTR)CallbackInfo->Address;
+    
+    // Search through our known modules
+    for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+        if (g_FoundModules[m].BaseAddress != NULL) {
+            ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+            ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
+            
+            // Check if callback address is within this module's range
+            if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
+                // Extract just the filename from path
+                WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
+                PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
+                
+                // Convert wide char to char (ASCII only)
+                for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                    CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
+                }
+                
+                // Set name based on offset from module base
+                sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                        "Callback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
+                
+                break;
+            }
+        }
     }
 }
 

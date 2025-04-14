@@ -156,7 +156,7 @@ NTSTATUS DispatchDeviceControl(
             break;
 
         case IOCTL_ENUM_CALLBACKS:
-            status = HandleEnumCallbacksIOCTL(Irp, stack);
+            status = HandleEnumerateCallbacksIOCTL(Irp, stack);
             break;
 
         default:

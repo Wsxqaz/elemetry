@@ -178,6 +178,22 @@ std::string GetCallbackTypeString(CALLBACK_TYPE type) {
     case CALLBACK_TYPE::ObProcessHandlePost: return "ObProcessHandlePost";
     case CALLBACK_TYPE::ObThreadHandlePre: return "ObThreadHandlePre";
     case CALLBACK_TYPE::ObThreadHandlePost: return "ObThreadHandlePost";
+    case CALLBACK_TYPE::FsPreCreate: return "FsPreCreate";
+    case CALLBACK_TYPE::FsPostCreate: return "FsPostCreate";
+    case CALLBACK_TYPE::FsPreClose: return "FsPreClose";
+    case CALLBACK_TYPE::FsPostClose: return "FsPostClose";
+    case CALLBACK_TYPE::FsPreRead: return "FsPreRead";
+    case CALLBACK_TYPE::FsPostRead: return "FsPostRead";
+    case CALLBACK_TYPE::FsPreWrite: return "FsPreWrite";
+    case CALLBACK_TYPE::FsPostWrite: return "FsPostWrite";
+    case CALLBACK_TYPE::FsPreQueryInfo: return "FsPreQueryInfo";
+    case CALLBACK_TYPE::FsPostQueryInfo: return "FsPostQueryInfo";
+    case CALLBACK_TYPE::FsPreSetInfo: return "FsPreSetInfo";
+    case CALLBACK_TYPE::FsPostSetInfo: return "FsPostSetInfo";
+    case CALLBACK_TYPE::FsPreDirCtrl: return "FsPreDirCtrl";
+    case CALLBACK_TYPE::FsPostDirCtrl: return "FsPostDirCtrl";
+    case CALLBACK_TYPE::FsPreFsCtrl: return "FsPreFsCtrl";
+    case CALLBACK_TYPE::FsPostFsCtrl: return "FsPostFsCtrl";
     default: return "Unknown";
     }
 }
@@ -2252,6 +2268,100 @@ bool AttemptScanForCallbackList(HANDLE deviceHandle, PVOID kernelBase, PVOID& ca
     return true;
 }
 
+// Function to get and display minifilter callbacks from the driver
+bool GetDriverMinifilterCallbacks() {
+    HANDLE deviceHandle = OpenDriverHandle();
+    if (deviceHandle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    // Calculate buffer size for the request
+    const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
+    const DWORD requestSize = FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks) + 
+                              (maxCallbacks * sizeof(CALLBACK_INFO_SHARED));
+    
+    // Allocate buffer
+    std::vector<BYTE> buffer(requestSize, 0);
+    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(buffer.data());
+    
+    // Set up request
+    request->Type = CallbackTableFilesystem;
+    request->TableAddress = nullptr; // Not needed for minifilters
+    request->MaxCallbacks = maxCallbacks;
+    request->FoundCallbacks = 0;
+
+    // Send IOCTL to get minifilter callbacks
+    DWORD bytesReturned = 0;
+    BOOL success = DeviceIoControl(
+        deviceHandle,
+        IOCTL_ENUM_CALLBACKS,
+        request, requestSize,
+        request, requestSize,
+        &bytesReturned,
+        nullptr
+    );
+
+    if (!success) {
+        std::cerr << "DeviceIoControl failed. Error code: " << GetLastError() << std::endl;
+        CloseHandle(deviceHandle);
+        return false;
+    }
+
+    // Print results
+    std::cout << "Retrieved " << request->FoundCallbacks << " minifilter callbacks:" << std::endl << std::endl;
+    for (DWORD i = 0; i < request->FoundCallbacks; i++) {
+        PrintCallbackInfo(request->Callbacks[i]);
+    }
+
+    // Create a file name with timestamp for exporting
+    std::string fileBaseName = "elemetry_minifilter_";
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char timeStr[100];
+    sprintf_s(timeStr, sizeof(timeStr), "%04d%02d%02d_%02d%02d%02d", 
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    fileBaseName += timeStr;
+    fileBaseName += ".txt";
+    
+    // Set the path to current directory
+    std::string fileName = fileBaseName;
+    
+    // Open output file
+    std::ofstream outFile(fileName);
+    if (outFile.is_open()) {
+        // Write header
+        outFile << "Elemetry Minifilter Callback Enumeration Results" << std::endl;
+        outFile << "=============================================" << std::endl;
+        outFile << "Total minifilter callbacks found: " << request->FoundCallbacks << std::endl;
+        outFile << "Date/Time: " << timeStr << std::endl << std::endl;
+        
+        // Write callback details
+        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
+            WriteCallbackToFile(outFile, request->Callbacks[i]);
+        }
+        
+        // Add summary of module sources
+        outFile << "\nCallback Source Summary:" << std::endl;
+        outFile << "----------------------" << std::endl;
+        
+        std::unordered_map<std::string, int> moduleCounts;
+        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
+            std::string moduleName = request->Callbacks[i].ModuleName;
+            moduleCounts[moduleName]++;
+        }
+        
+        for (const auto& pair : moduleCounts) {
+            outFile << pair.first << ": " << pair.second << " callbacks" << std::endl;
+        }
+        
+        std::cout << "Results successfully written to " << fileName << std::endl;
+        outFile.close();
+    }
+
+    CloseHandle(deviceHandle);
+    return true;
+}
+
 // Main function - update with additional menu options
 int main() {
     std::cout << "Elemetry Client - Driver Module and Callback Enumerator" << std::endl;
@@ -2286,9 +2396,10 @@ int main() {
         std::cout << "5. Enumerate process creation callbacks (PspCreateProcessNotifyRoutine)" << std::endl;
         std::cout << "6. Enumerate thread creation callbacks (PspCreateThreadNotifyRoutine)" << std::endl;
         std::cout << "7. Enumerate registry callbacks (CmCallbackListHead)" << std::endl;
+        std::cout << "8. Enumerate minifilter callbacks" << std::endl;
         std::cout << "0. Exit" << std::endl;
         std::cout << std::endl;
-        std::cout << "Select an operation (0-7): ";
+        std::cout << "Select an operation (0-8): ";
 
         int choice;
         std::cin >> choice;
@@ -2331,6 +2442,11 @@ int main() {
             case 7:
                 // Use our new function that tries multiple symbol names
                 TryEnumerateRegistryCallbacks(deviceHandle);
+                break;
+                
+            case 8:
+                std::cout << std::endl << "Enumerating minifilter callbacks..." << std::endl;
+                GetDriverMinifilterCallbacks();
                 break;
                 
             default:

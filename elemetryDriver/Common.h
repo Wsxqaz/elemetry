@@ -1,5 +1,45 @@
 #pragma once
 
+#include <ntdef.h>
+#include <ntddk.h>
+#include <wdm.h>
+
+// System Information Class definitions
+typedef enum _SYSTEM_INFORMATION_CLASS {
+    SystemModuleInformation = 11
+} SYSTEM_INFORMATION_CLASS;
+
+// System module structures
+typedef struct _SYSTEM_MODULE {
+    ULONG_PTR Reserved[2];
+    PVOID ImageBase;
+    ULONG ImageSize;
+    ULONG Flags;
+    USHORT Index;
+    USHORT Unknown;
+    USHORT LoadCount;
+    USHORT ModuleNameOffset;
+    CHAR ImageName[256];
+} SYSTEM_MODULE, *PSYSTEM_MODULE;
+
+typedef struct _SYSTEM_MODULE_INFORMATION {
+    ULONG Count;
+    SYSTEM_MODULE Modules[1];
+} SYSTEM_MODULE_INFORMATION, *PSYSTEM_MODULE_INFORMATION;
+
+// Function declaration for ZwQuerySystemInformation with extern "C"
+extern "C" {
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwQuerySystemInformation(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength
+);
+}
+
 // Define constants
 #define MAX_PATH 260
 #define MAX_CALLBACKS_SHARED 64
@@ -26,6 +66,22 @@ enum class CALLBACK_TYPE
     ObProcessHandlePost = 6,
     ObThreadHandlePre = 7,
     ObThreadHandlePost = 8,
+    FsPreCreate = 9,
+    FsPostCreate = 10,
+    FsPreClose = 11,
+    FsPostClose = 12,
+    FsPreRead = 13,
+    FsPostRead = 14,
+    FsPreWrite = 15,
+    FsPostWrite = 16,
+    FsPreQueryInfo = 17,
+    FsPostQueryInfo = 18,
+    FsPreSetInfo = 19,
+    FsPostSetInfo = 20,
+    FsPreDirCtrl = 21,
+    FsPostDirCtrl = 22,
+    FsPreFsCtrl = 23,
+    FsPostFsCtrl = 24
     // Add more as needed
 };
 
@@ -77,6 +133,7 @@ typedef enum _CALLBACK_TABLE_TYPE {
     CallbackTableCreateProcess,
     CallbackTableCreateThread,
     CallbackTableRegistry,
+    CallbackTableFilesystem,
     CallbackTableMax
 } CALLBACK_TABLE_TYPE;
 

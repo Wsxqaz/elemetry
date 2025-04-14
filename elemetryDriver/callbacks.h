@@ -36,8 +36,7 @@ NTSTATUS GetSystemModules(
 
 // --- IOCTL Handlers ---
 NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
-NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
-NTSTATUS HandleEnumCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
+extern "C" NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack);
 
 // --- PE Parsing Helper ---
 NTSTATUS ParseModuleExports(_Inout_ PPE_PARSE_CONTEXT ParseContext);
@@ -57,7 +56,7 @@ NTSTATUS ReadKernelMemory(
 );
 
 // Protected read helper
-NTSTATUS ReadProtectedKernelMemory(
+extern "C" NTSTATUS ReadProtectedKernelMemory(
     _In_ PVOID KernelAddress,
     _Out_writes_bytes_(Size) PVOID OutputBuffer,
     _In_ SIZE_T Size,
@@ -65,7 +64,7 @@ NTSTATUS ReadProtectedKernelMemory(
 );
 
 // --- Callback Enumeration Functions ---
-NTSTATUS EnumerateLoadImageCallbacks(
+extern "C" NTSTATUS EnumerateLoadImageCallbacks(
     _In_opt_ PVOID CallbackTable,
     _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
     _In_ ULONG MaxCallbacks,
@@ -88,6 +87,12 @@ NTSTATUS EnumerateCreateThreadCallbacks(
 
 NTSTATUS EnumerateRegistryCallbacks(
     _In_opt_ PVOID CallbackTable,
+    _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
+    _In_ ULONG MaxCallbacks,
+    _Out_ PULONG FoundCallbacks
+);
+
+NTSTATUS EnumerateFilesystemCallbacks(
     _Out_writes_to_(MaxCallbacks, *FoundCallbacks) PCALLBACK_INFO_SHARED CallbackArray,
     _In_ ULONG MaxCallbacks,
     _Out_ PULONG FoundCallbacks
