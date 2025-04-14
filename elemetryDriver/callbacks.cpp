@@ -8,12 +8,16 @@
 #define NTDDI_VERSION 0x0A000000  // Windows 10
 #endif
 
+// Include Filter Manager headers
+#include <fltKernel.h>
+#include <ntddk.h>
+#include <ntifs.h>
+
 // Include Common.h FIRST for shared definitions
 #include "Common.h"    // Project common definitions
 #include "callbacks.h" // Function prototypes
 
 // Include other headers in proper order
-#include <ntddk.h>     // Base NT kernel definitions
 #include <wdm.h>       // Windows Driver Model
 #include <ntstrsafe.h> // String functions
 #include <ntimage.h>   // PE image parsing and loader structures
@@ -98,6 +102,21 @@ static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define
 #define SYSTEM_MODULE_BUFFER_SIZE 96000  // Size needed for system module info (increased from 47368)
 static UCHAR g_ModuleInfoBuffer[MODULE_INFO_BUFFER_SIZE];
 static UCHAR g_SystemModuleBuffer[SYSTEM_MODULE_BUFFER_SIZE];
+
+// Define minifilter types if not already defined
+#ifndef _FLT_INSTANCE_DEFINED
+typedef struct _FLT_INSTANCE {
+    PFLT_FILTER Filter;
+    // Add other fields as needed
+} FLT_INSTANCE, *PFLT_INSTANCE;
+#endif
+
+#ifndef _FLT_FILTER_DEFINED
+typedef struct _FLT_FILTER {
+    PFLT_OPERATION_REGISTRATION OperationRegistration;
+    // Add other fields as needed
+} FLT_FILTER, *PFLT_FILTER;
+#endif
 
 // Function pointers that may not be available in older Windows versions
 
@@ -1408,187 +1427,128 @@ NTSTATUS EnumerateFilesystemCallbacks(
 
     DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Beginning minifilter enumeration\n");
 
-    // Ensure module information is initialized
-    if (!g_ModulesInitialized) {
-        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Modules not initialized, initializing now...\n");
-        ULONG bytesWritten = 0;
-        NTSTATUS moduleStatus = GetHardcodedModules(NULL, 0, &bytesWritten);
-        if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) {
-            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to initialize modules: 0x%X\n", moduleStatus);
-            // Continue with potentially NULL addresses
-        }
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG NumberFiltersReturned = 0;
+    ULONG count = 0;
+
+    // First get the number of filters
+    Status = FltEnumerateFilters(nullptr, 0, &NumberFiltersReturned);
+    if (Status != STATUS_BUFFER_TOO_SMALL) {
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to get filter count: 0x%X\n", Status);
+        return Status;
     }
 
-    __try {
-        // Structure to hold minifilter driver information from FltMgr
-        typedef struct _MINIFILTER_INFO {
-            WCHAR FilterName[64];                  // Filter display name
-            PVOID FilterDriverObject;              // Driver object pointer for this filter
-            PVOID FilterHandle;                    // Filter handle for operations
-        } MINIFILTER_INFO, *PMINIFILTER_INFO;
+    // Allocate buffer for filters
+    SIZE_T BufferSize = sizeof(PFLT_FILTER) * NumberFiltersReturned;
+    PFLT_FILTER* FilterList = (PFLT_FILTER*)ExAllocatePool2(POOL_FLAG_NON_PAGED, BufferSize, DRIVER_TAG);
+    if (!FilterList) {
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to allocate filter list\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-        // Define supported major functions for minifilters
-        struct OPERATION_MAPPING {
-            ULONG IrpMajorFunction;         // IRP major function code
-            CALLBACK_TYPE PreCallbackType;  // Our pre-operation type
-            CALLBACK_TYPE PostCallbackType; // Our post-operation type
-            PCSTR OperationName;            // Operation name for display/debug
-        };
+    // Get the actual filters
+    Status = FltEnumerateFilters(FilterList, (ULONG)BufferSize, &NumberFiltersReturned);
+    if (!NT_SUCCESS(Status)) {
+        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to enumerate filters: 0x%X\n", Status);
+        ExFreePoolWithTag(FilterList, DRIVER_TAG);
+        return Status;
+    }
 
-        // Map from major IRP functions to our callback types 
-        OPERATION_MAPPING operationMap[] = {
-            { IRP_MJ_CREATE,              static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreCreate),     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostCreate),     "Create" },
-            { IRP_MJ_CLOSE,               static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreClose),      static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostClose),      "Close" },
-            { IRP_MJ_READ,                static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreRead),       static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostRead),       "Read" },
-            { IRP_MJ_WRITE,               static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreWrite),      static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostWrite),      "Write" },
-            { IRP_MJ_QUERY_INFORMATION,   static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreQueryInfo),  static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostQueryInfo),  "QueryInfo" },
-            { IRP_MJ_SET_INFORMATION,     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreSetInfo),    static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostSetInfo),    "SetInfo" },
-            { IRP_MJ_DIRECTORY_CONTROL,   static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreDirCtrl),    static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostDirCtrl),    "DirCtrl" },
-            { IRP_MJ_FILE_SYSTEM_CONTROL, static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPreFsCtrl),     static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::FsPostFsCtrl),     "FsCtrl" }
-        };
-
-        ULONG count = 0;  // Number of callbacks found
-
-        // List of common minifilters to scan for
-        const WCHAR* knownMinifilters[] = {
-            L"luafv.sys",      // LUA File Virtualization Filter
-            L"fileinfo.sys",   // File Information Minifilter
-            L"npsvctrig.sys",  // Named Pipe Service Trigger
-            L"wcifs.sys",      // Windows Container Isolation FS
-            L"ntfs.sys",       // NTFS - not a minifilter but contains callbacks
-            L"bindflt.sys",    // Binding Filter
-            L"filecrypt.sys",  // File Encryption Filter
-            L"fsdepends.sys",  // File System Dependency Manager
-            L"ioqos.sys",      // Storage Quality of Service Filter
-            L"epfw.sys",       // Endpoint Security Filter
-            L"peauth.sys",     // Protected Environment Authentication
-            L"dfsrflt.sys",    // DFS Replication Filter
-            L"kdnic.sys",      // Kernel Debugging Network Adapter
-            L"WdFilter.sys",   // Windows Defender Minifilter
-            L"fltmgr.sys"      // Filter Manager
-        };
-
-        // Debug: Print all loaded modules
-        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Checking loaded modules...\n");
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
-            if (g_FoundModules[m].BaseAddress != NULL) {
-                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found module %ws at %p\n", 
-                        g_FoundModules[m].Path, g_FoundModules[m].BaseAddress);
-            }
+    // Process each filter
+    for (ULONG i = 0; i < NumberFiltersReturned && count < MaxCallbacks; i++) {
+        // Get filter information
+        ULONG BytesReturned = 0;
+        Status = FltGetFilterInformation(FilterList[i], FilterFullInformation, nullptr, 0, &BytesReturned);
+        if (Status != STATUS_BUFFER_TOO_SMALL) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to get filter info size: 0x%X\n", Status);
+            continue;
         }
 
-        // Find each minifilter driver and scan its dispatch table
-        for (int filterIndex = 0; filterIndex < ARRAYSIZE(knownMinifilters) && count < MaxCallbacks; filterIndex++) {
-            PVOID minifilterBase = NULL;
-            
-            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Looking for minifilter %ws\n", knownMinifilters[filterIndex]);
-            
-            // Find the minifilter module base address
-            for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
-                if (g_FoundModules[m].BaseAddress == NULL) {
-                    continue;
+        PFILTER_FULL_INFORMATION FullFilterInfo = (PFILTER_FULL_INFORMATION)ExAllocatePool2(POOL_FLAG_NON_PAGED, BytesReturned, DRIVER_TAG);
+        if (!FullFilterInfo) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to allocate filter info\n");
+            continue;
+        }
+
+        Status = FltGetFilterInformation(FilterList[i], FilterFullInformation, FullFilterInfo, BytesReturned, &BytesReturned);
+        if (!NT_SUCCESS(Status)) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to get filter info: 0x%X\n", Status);
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            continue;
+        }
+
+        // Get filter instances
+        ULONG NumberInstancesReturned = 0;
+        Status = FltEnumerateInstances(nullptr, FilterList[i], nullptr, 0, &NumberInstancesReturned);
+        if (Status != STATUS_BUFFER_TOO_SMALL) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to get instance count: 0x%X\n", Status);
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            continue;
+        }
+
+        BufferSize = sizeof(PFLT_INSTANCE) * NumberInstancesReturned;
+        PFLT_INSTANCE* InstanceList = (PFLT_INSTANCE*)ExAllocatePool2(POOL_FLAG_NON_PAGED, BufferSize, DRIVER_TAG);
+        if (!InstanceList) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to allocate instance list\n");
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            continue;
+        }
+
+        Status = FltEnumerateInstances(nullptr, FilterList[i], InstanceList, (ULONG)BufferSize, &NumberInstancesReturned);
+        if (!NT_SUCCESS(Status)) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to enumerate instances: 0x%X\n", Status);
+            ExFreePoolWithTag(InstanceList, DRIVER_TAG);
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            continue;
+        }
+
+        if (!NumberInstancesReturned) {
+            ExFreePoolWithTag(InstanceList, DRIVER_TAG);
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            continue;
+        }
+
+        // Process callbacks using the safer approach
+        for (ULONG j = 0x16; j < 0x32 && count < MaxCallbacks; j++) {
+            // Get callback from instance structure
+            PVOID Callback = (PVOID)*(PULONG_PTR)((((ULONG_PTR)InstanceList[0]) + 0x90) + sizeof(PVOID) * j);
+
+            if (Callback) {
+                // Get pre and post operation callbacks
+                PVOID PreCallback = (PVOID)*(PULONG_PTR)(((ULONG_PTR)Callback) + 0x18);
+                PVOID PostCallback = (PVOID)*(PULONG_PTR)(((ULONG_PTR)Callback) + 0x20);
+
+                if (PreCallback) {
+                    CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 11);
+                    CallbackArray[count].Address = PreCallback;
+                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_PATH, 
+                                   (const char*)FullFilterInfo->FilterNameBuffer);
+                    RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                                     "PreOperation_%u", j - 0x16);
+                    count++;
                 }
 
-                WCHAR moduleName[MAX_PATH] = { 0 };
-                wcscpy_s(moduleName, MAX_PATH, g_FoundModules[m].Path);
-                // Convert to lowercase
-                for (int k = 0; moduleName[k]; k++) {
-                    moduleName[k] = towlower(moduleName[k]);
+                if (PostCallback) {
+                    CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 12);
+                    CallbackArray[count].Address = PostCallback;
+                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_PATH, 
+                                   (const char*)FullFilterInfo->FilterNameBuffer);
+                    RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                                     "PostOperation_%u", j - 0x16);
+                    count++;
                 }
-
-                // Extract just the filename
-                WCHAR* lastSlash = wcsrchr(moduleName, L'\\');
-                PCWSTR fileName = lastSlash ? lastSlash + 1 : moduleName;
-
-                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Comparing %ws with %ws\n", 
-                        fileName, knownMinifilters[filterIndex]);
-
-                // Convert both names to lowercase for comparison
-                WCHAR fileNameLower[MAX_PATH] = {0};
-                WCHAR filterNameLower[MAX_PATH] = {0};
-                wcscpy_s(fileNameLower, MAX_PATH, fileName);
-                wcscpy_s(filterNameLower, MAX_PATH, knownMinifilters[filterIndex]);
-                
-                // Convert to lowercase
-                for (int k = 0; fileNameLower[k]; k++) {
-                    fileNameLower[k] = towlower(fileNameLower[k]);
-                }
-                for (int k = 0; filterNameLower[k]; k++) {
-                    filterNameLower[k] = towlower(filterNameLower[k]);
-                }
-
-                if (wcscmp(fileNameLower, filterNameLower) == 0) {
-                    minifilterBase = g_FoundModules[m].BaseAddress;
-                    DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found minifilter %ws at %p\n", 
-                            knownMinifilters[filterIndex], minifilterBase);
-                    break;
-                }
-            }
-
-            if (!minifilterBase) {
-                DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Could not find minifilter %ws\n", 
-                        knownMinifilters[filterIndex]);
-                continue; // Minifilter not found, try next one
-            }
-
-            // Extract the base file name for display
-            const WCHAR* lastSlash = wcsrchr(knownMinifilters[filterIndex], L'\\');
-            const WCHAR* minifilterName = lastSlash ? lastSlash + 1 : knownMinifilters[filterIndex];
-            
-            CHAR ansiFilterName[64] = {0};
-            for (int i = 0; minifilterName[i] && i < 63; i++) {
-                ansiFilterName[i] = (CHAR)minifilterName[i]; // Simple wide to narrow conversion
-            }
-
-            // For each minifilter, add entries for the main operations we support
-            for (int opIndex = 0; opIndex < ARRAYSIZE(operationMap) && count < MaxCallbacks; opIndex++) {
-                // Calculate the callback address based on the operation type
-                // For WdFilter.sys, IRP_MJ_CLOSE is at base + 0x30260
-                PVOID preCallback = (PVOID)((ULONG_PTR)minifilterBase + 0x30260 + (opIndex * 0x100));
-                PVOID postCallback = (PVOID)((ULONG_PTR)preCallback + 0x100);
-
-                // Add pre-operation callback entry
-                RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
-                CallbackArray[count].Type = operationMap[opIndex].PreCallbackType;
-                CallbackArray[count].Address = preCallback;
-                
-                sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
-                         "%s_Pre%s", ansiFilterName, operationMap[opIndex].OperationName);
-                
-                strcpy_s(CallbackArray[count].ModuleName, MAX_MODULE_NAME, ansiFilterName);
-                
-                count++;
-                
-                if (count >= MaxCallbacks) break;
-                
-                // Add post-operation callback entry
-                RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
-                CallbackArray[count].Type = operationMap[opIndex].PostCallbackType;
-                CallbackArray[count].Address = postCallback;
-                
-                sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, 
-                         "%s_Post%s", ansiFilterName, operationMap[opIndex].OperationName);
-                
-                strcpy_s(CallbackArray[count].ModuleName, MAX_MODULE_NAME, ansiFilterName);
-                
-                count++;
-                
-                if (count >= MaxCallbacks) break;
             }
         }
 
-        // Update the found count
-        *FoundCallbacks = count;
-        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found %u minifilter callbacks\n", count);
+        ExFreePoolWithTag(InstanceList, DRIVER_TAG);
+        ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+    }
 
-        return STATUS_SUCCESS;
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        NTSTATUS exceptionCode = GetExceptionCode();
-        DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Exception 0x%X during enumeration\n", 
-                exceptionCode);
-        return exceptionCode;
-    }
+    ExFreePoolWithTag(FilterList, DRIVER_TAG);
+    *FoundCallbacks = count;
+
+    DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Found %u minifilter callbacks\n", count);
+    return STATUS_SUCCESS;
 }
 
 // Helper function to find module info for a callback
@@ -1630,4 +1590,5 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
         }
     }
 }
+
 

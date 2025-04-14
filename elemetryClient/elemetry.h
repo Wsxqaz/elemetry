@@ -57,14 +57,90 @@ typedef struct _MODULE_INFO
     WCHAR Path[MAX_PATH];
 } MODULE_INFO, *PMODULE_INFO;
 
-// Define shared callback information structure - must match driver's definition
-typedef struct _CALLBACK_INFO_SHARED
-{
-    CALLBACK_TYPE Type;
-    PVOID Address;
-    ULONG Context;
-    CHAR CallbackName[MAX_CALLBACK_NAME];
-    CHAR ModuleName[MAX_MODULE_NAME];
+// Define structures for kernel memory reading operations
+typedef struct _KERNEL_READ_REQUEST {
+    PVOID Address;       // Kernel address to read from
+    PVOID Buffer;        // Output buffer (usermode)
+    SIZE_T Size;         // Size to read
+    SIZE_T BytesRead;    // Bytes actually read
+} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
+
+// Define structures for callback enumeration
+typedef enum _CALLBACK_TABLE_TYPE {
+    CallbackTableLoadImage = 0,
+    CallbackTableCreateProcess,
+    CallbackTableCreateThread,
+    CallbackTableRegistry,
+    CallbackTableFilesystem, // Minifilter callbacks
+    CallbackTableMax
+} CALLBACK_TABLE_TYPE;
+
+// Minifilter callback types
+typedef enum _MINIFILTER_CALLBACK_TYPE {
+    MfUnknown = 0,
+    MfCreatePre,
+    MfCreatePost,
+    MfCreateNamedPipePre,
+    MfCreateNamedPipePost,
+    MfClosePre,
+    MfClosePost,
+    MfReadPre,
+    MfReadPost,
+    MfWritePre,
+    MfWritePost,
+    MfQueryInformationPre,
+    MfQueryInformationPost,
+    MfSetInformationPre,
+    MfSetInformationPost,
+    MfQueryEaPre,
+    MfQueryEaPost,
+    MfSetEaPre,
+    MfSetEaPost,
+    MfFlushBuffersPre,
+    MfFlushBuffersPost,
+    MfQueryVolumeInformationPre,
+    MfQueryVolumeInformationPost,
+    MfSetVolumeInformationPre,
+    MfSetVolumeInformationPost,
+    MfDirectoryControlPre,
+    MfDirectoryControlPost,
+    MfFileSystemControlPre,
+    MfFileSystemControlPost,
+    MfDeviceControlPre,
+    MfDeviceControlPost,
+    MfInternalDeviceControlPre,
+    MfInternalDeviceControlPost,
+    MfShutdownPre,
+    MfShutdownPost,
+    MfLockControlPre,
+    MfLockControlPost,
+    MfCleanupPre,
+    MfCleanupPost,
+    MfCreateMailslotPre,
+    MfCreateMailslotPost,
+    MfQuerySecurityPre,
+    MfQuerySecurityPost,
+    MfSetSecurityPre,
+    MfSetSecurityPost,
+    MfPowerPre,
+    MfPowerPost,
+    MfSystemControlPre,
+    MfSystemControlPost,
+    MfDeviceChangePre,
+    MfDeviceChangePost,
+    MfQueryQuotaPre,
+    MfQueryQuotaPost,
+    MfSetQuotaPre,
+    MfSetQuotaPost,
+    MfPnpPre,
+    MfPnpPost
+} MINIFILTER_CALLBACK_TYPE;
+
+typedef struct _CALLBACK_INFO_SHARED {
+    MINIFILTER_CALLBACK_TYPE Type;    // Type of callback
+    PVOID Address;                    // Address of callback
+    CHAR ModuleName[MAX_PATH];        // Name of module containing callback
+    CHAR CallbackName[MAX_PATH];      // Name of callback function
 } CALLBACK_INFO_SHARED, *PCALLBACK_INFO_SHARED;
 
 // Define user-mode callback information structure
@@ -87,24 +163,6 @@ typedef struct _CALLBACK_ENTRY_UI
     CHAR ModuleName[MAX_MODULE_NAME];
     BOOLEAN Suppressed;
 } CALLBACK_ENTRY_UI, *PCALLBACK_ENTRY_UI;
-
-// Define structures for kernel memory reading operations
-typedef struct _KERNEL_READ_REQUEST {
-    PVOID Address;       // Kernel address to read from
-    PVOID Buffer;        // Output buffer (usermode)
-    SIZE_T Size;         // Size to read
-    SIZE_T BytesRead;    // Bytes actually read
-} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
-
-// Define structures for callback enumeration
-typedef enum _CALLBACK_TABLE_TYPE {
-    CallbackTableLoadImage = 0,
-    CallbackTableCreateProcess,
-    CallbackTableCreateThread,
-    CallbackTableRegistry,
-    CallbackTableFilesystem, // Minifilter callbacks
-    CallbackTableMax
-} CALLBACK_TABLE_TYPE;
 
 typedef struct _CALLBACK_ENUM_REQUEST {
     CALLBACK_TABLE_TYPE Type;         // Type of callback to enumerate

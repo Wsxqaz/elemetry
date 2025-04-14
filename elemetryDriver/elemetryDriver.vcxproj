@@ -60,13 +60,13 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;POOL_NX_OPTIN=1;NTDDI_VERSION=0x0A000000;POOL_ZERO_DOWN_LEVEL_SUPPORT;NO_WDM_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>false</ExceptionHandling>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km\crt;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\shared;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km\crt;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\shared;$(WindowsSdkDir)\Include\wdf\kmdf\1.15;$(WindowsSdkDir)\Include\wdf\kmdf\1.15\shared;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Native</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>ntoskrnl.lib;hal.lib;Aux_Klib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntoskrnl.lib;hal.lib;Aux_Klib.lib;fltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/DRIVER /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /MANIFEST:NO /DYNAMICBASE %(AdditionalOptions)</AdditionalOptions>
       <AdditionalLibraryDirectories>$(WindowsSdkDir)\Lib\$(WindowsTargetPlatformVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>$(OutDir)$(TargetName).lib</ImportLibrary>
@@ -88,13 +88,13 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;POOL_NX_OPTIN=1;NTDDI_VERSION=0x0A000000;POOL_ZERO_DOWN_LEVEL_SUPPORT;NO_WDM_H;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>false</ExceptionHandling>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km\crt;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\shared;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\km\crt;$(WindowsSdkDir)\Include\$(WindowsTargetPlatformVersion)\shared;$(WindowsSdkDir)\Include\wdf\kmdf\1.15;$(WindowsSdkDir)\Include\wdf\kmdf\1.15\shared;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Native</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>ntoskrnl.lib;hal.lib;Aux_Klib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntoskrnl.lib;hal.lib;Aux_Klib.lib;fltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/DRIVER /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /MANIFEST:NO /DYNAMICBASE %(AdditionalOptions)</AdditionalOptions>
       <AdditionalLibraryDirectories>$(WindowsSdkDir)\Lib\$(WindowsTargetPlatformVersion)\km\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>$(OutDir)$(TargetName).lib</ImportLibrary>
