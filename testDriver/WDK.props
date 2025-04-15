@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <WindowsKitsRoot Condition="'$(WindowsKitsRoot)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Kits\Installed Roots@KitsRoot10)</WindowsKitsRoot>
+    <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(Registry:HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Kits\Installed Roots@KitsRoot10)</WDKContentRoot>
+    <WDKVersion Condition="'$(WDKVersion)' == ''">10.0.22621.0</WDKVersion>
+    <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(WindowsKitsRoot)</WDKContentRoot>
+    <WDKContentRoot Condition="!HasTrailingSlash('$(WDKContentRoot)')">$(WDKContentRoot)\</WDKContentRoot>
+    <WDKContentRoot Condition="!Exists('$(WDKContentRoot)')">C:\Program Files (x86)\Windows Kits\10\</WDKContentRoot>
+    <WDKContentRoot Condition="!Exists('$(WDKContentRoot)')">C:\Program Files\Windows Kits\10\</WDKContentRoot>
+  </PropertyGroup>
+  <PropertyGroup>
+    <IncludePath>$(WDKContentRoot)Include\$(WDKVersion)\km;$(IncludePath)</IncludePath>
+    <LibraryPath>$(WDKContentRoot)Lib\$(WDKVersion)\km\x64;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+</Project> 

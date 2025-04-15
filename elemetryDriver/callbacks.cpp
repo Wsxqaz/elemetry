@@ -34,40 +34,12 @@
 // Define DRIVER_TAG for memory allocation
 #define DRIVER_TAG 'ELMT'  // Elemetry Driver Tag
 
-// Define LDR_DATA_TABLE_ENTRY structure
-typedef struct _LDR_DATA_TABLE_ENTRY {
-    LIST_ENTRY InLoadOrderLinks;
-    LIST_ENTRY InMemoryOrderLinks;
-    LIST_ENTRY InInitializationOrderLinks;
-    PVOID DllBase;
-    PVOID EntryPoint;
-    ULONG SizeOfImage;
-    UNICODE_STRING FullDllName;
-    UNICODE_STRING BaseDllName;
-    ULONG Flags;
-    USHORT LoadCount;
-    USHORT TlsIndex;
-    union {
-        LIST_ENTRY HashLinks;
-        struct {
-            PVOID SectionPointer;
-            ULONG CheckSum;
-        };
-    };
-    union {
-        ULONG TimeDateStamp;
-        PVOID LoadedImports;
-    };
-    PVOID EntryPointActivationContext;
-    PVOID PatchInformation;
-} LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
-
 // Global callback tracking array - using the shared struct
 CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
 ULONG g_CallbackCount = 0;
 
 // Define the number of hardcoded modules we are looking for
-#define HARDCODED_MODULE_COUNT 17 // Updated count to include WdFilter.sys
+#define HARDCODED_MODULE_COUNT 19 // Updated count to include WdFilter.sys
 
 // Internal storage for found module information
 static MODULE_INFO g_FoundModules[HARDCODED_MODULE_COUNT]; // Now this should work
@@ -94,7 +66,9 @@ static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define
     L"fileinfo.sys",
     L"wcifs.sys",
     L"fltmgr.sys",  // Changed bindflt.sys to fltmgr.sys since we need it for filesystem callbacks
-    L"WdFilter.sys" // Added Windows Defender minifilter driver
+    L"WdFilter.sys", // Added Windows Defender minifilter driver
+    L"fltlib.sys",   // Added fltlib.sys for minifilter driver operations
+    L"bindflt.sys"   // Added bindflt.sys for minifilter driver operations
 };
 
 // Define static buffers
@@ -202,36 +176,6 @@ static BOOLEAN FindModuleByName(
     return Found;
 }
 
-// Helper function to get base address of a module by name from internal storage
-static PVOID GetInternalModuleBase(_In_ PCWSTR ModuleName)
-{
-    if (!g_ModulesInitialized) {
-        DbgPrint("[elemetry] GetInternalModuleBase: Module info not initialized yet!\n");
-        return NULL;
-    }
-
-    for (ULONG i = 0; i < HARDCODED_MODULE_COUNT; ++i) {
-        // Compare the stored path with the requested name (case-insensitive filename only)
-        WCHAR StoredNameOnly[MAX_PATH] = {0};
-        WCHAR* LastBackslash = wcsrchr(g_FoundModules[i].Path, L'\\');
-        PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[i].Path;
-        wcscpy_s(StoredNameOnly, MAX_PATH, FileNameOnly);
-        for (int k = 0; StoredNameOnly[k]; k++) { StoredNameOnly[k] = towlower(StoredNameOnly[k]); } // Manual lowercase
-
-        WCHAR RequestedNameOnly[MAX_PATH] = {0};
-        LastBackslash = wcsrchr(ModuleName, L'\\');
-        FileNameOnly = LastBackslash ? LastBackslash + 1 : ModuleName;
-        wcscpy_s(RequestedNameOnly, MAX_PATH, FileNameOnly);
-        for (int k = 0; RequestedNameOnly[k]; k++) { RequestedNameOnly[k] = towlower(RequestedNameOnly[k]); } // Manual lowercase
-
-        if (wcscmp(StoredNameOnly, RequestedNameOnly) == 0) {
-            return g_FoundModules[i].BaseAddress;
-        }
-    }
-
-    DbgPrint("[elemetry] GetInternalModuleBase: Module %S not found in internal list.\n", ModuleName);
-    return NULL;
-}
 
 // --- Helper to get hardcoded modules ---
 NTSTATUS GetHardcodedModules(
@@ -801,7 +745,7 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
     // Allocate buffer for callback pointers
     PVOID* callbackPointers = (PVOID*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
                                                       sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
-                                                      'CBpT');
+                                                      DRIVER_TAG);
     if (!callbackPointers) {
         DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to allocate memory\n");
         return STATUS_INSUFFICIENT_RESOURCES;

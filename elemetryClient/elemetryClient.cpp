@@ -87,37 +87,6 @@ BOOL CALLBACK SymEnumCallbackForDump(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PV
     return TRUE; // Continue enumeration
 }
 
-// Windows version-specific callback table addresses (offsets from ntoskrnl.exe base)
-struct WinVersionCallbacks {
-    DWORD BuildNumber;             // Windows build number
-    ULONG_PTR LoadImageOffset;     // Offset of PspLoadImageNotifyRoutine from kernel base
-    ULONG_PTR ProcessCreateOffset; // Offset of PspCreateProcessNotifyRoutine from kernel base
-    ULONG_PTR RegistryOffset;      // Offset of CmCallbackListHead from kernel base
-    const char* Description;       // Description of Windows version
-};
-
-// Known offsets for different Windows versions
-// These values need to be updated for each new Windows version
-const WinVersionCallbacks KnownCallbackOffsets[] = {
-    // Windows 10 21H2 (Build 19044)
-    { 19044, 0x359990, 0x359950, 0x4C93E0, "Windows 10 21H2" },
-    // Windows 10 22H2 (Build 19045)
-    { 19045, 0x359990, 0x359950, 0x4C93E0, "Windows 10 22H2" },
-    // Windows Server 2022 (Build 20348) - Updated with lock offset
-    { 20348, 0x3A2F30, 0x3A2EF0, 0xC53960, "Windows Server 2022" },
-    // Windows 11 21H2 (Build 22000)
-    { 22000, 0x3ADA50, 0x3ADA10, 0x5251E8, "Windows 11 21H2" },
-    // Windows 11 22H2 (Build 22621)
-    { 22621, 0x3B4710, 0x3B46D0, 0x52F280, "Windows 11 22H2" },
-    // Windows 11 23H2 (Build 22631)
-    { 22631, 0x3B4750, 0x3B4710, 0x52F2C0, "Windows 11 23H2" },
-    // Windows 11 24H2 (Build 26100) - Approximate offsets based on 23H2
-    { 26100, 0x3B4790, 0x3B4750, 0x52F300, "Windows 11 24H2" },
-    // Fedora Linux kernel version 6.9 (approximate match assuming Windows-compatible offsets)
-    { 26900, 0x3B4800, 0x3B4780, 0x52F340, "Fedora Linux 6.9.x (approx)" },
-    // Add more as needed for different Windows versions
-};
-const int KnownCallbackOffsetCount = sizeof(KnownCallbackOffsets) / sizeof(WinVersionCallbacks);
 
 // Forward Declarations
 bool GetWindowsVersion(DWORD& buildNumber);
@@ -166,55 +135,45 @@ void PrintModuleInfo(const MODULE_INFO& moduleInfo) {
     std::cout << std::endl;
 }
 
-// Function to get callback type as string
-std::string GetCallbackTypeString(CALLBACK_TYPE type) {
+// Function to get minifilter callback type as string
+std::string GetMinifilterCallbackTypeString(MINIFILTER_CALLBACK_TYPE type) {
     switch (type) {
-    case CALLBACK_TYPE::Unknown: return "Unknown";
-    case CALLBACK_TYPE::PsLoadImage: return "PsLoadImage";
-    case CALLBACK_TYPE::PsProcessCreation: return "PsProcessCreation";
-    case CALLBACK_TYPE::PsThreadCreation: return "PsThreadCreation";
-    case CALLBACK_TYPE::CmRegistry: return "CmRegistry";
-    case CALLBACK_TYPE::ObProcessHandlePre: return "ObProcessHandlePre";
-    case CALLBACK_TYPE::ObProcessHandlePost: return "ObProcessHandlePost";
-    case CALLBACK_TYPE::ObThreadHandlePre: return "ObThreadHandlePre";
-    case CALLBACK_TYPE::ObThreadHandlePost: return "ObThreadHandlePost";
-    case CALLBACK_TYPE::FsPreCreate: return "FsPreCreate";
-    case CALLBACK_TYPE::FsPostCreate: return "FsPostCreate";
-    case CALLBACK_TYPE::FsPreClose: return "FsPreClose";
-    case CALLBACK_TYPE::FsPostClose: return "FsPostClose";
-    case CALLBACK_TYPE::FsPreRead: return "FsPreRead";
-    case CALLBACK_TYPE::FsPostRead: return "FsPostRead";
-    case CALLBACK_TYPE::FsPreWrite: return "FsPreWrite";
-    case CALLBACK_TYPE::FsPostWrite: return "FsPostWrite";
-    case CALLBACK_TYPE::FsPreQueryInfo: return "FsPreQueryInfo";
-    case CALLBACK_TYPE::FsPostQueryInfo: return "FsPostQueryInfo";
-    case CALLBACK_TYPE::FsPreSetInfo: return "FsPreSetInfo";
-    case CALLBACK_TYPE::FsPostSetInfo: return "FsPostSetInfo";
-    case CALLBACK_TYPE::FsPreDirCtrl: return "FsPreDirCtrl";
-    case CALLBACK_TYPE::FsPostDirCtrl: return "FsPostDirCtrl";
-    case CALLBACK_TYPE::FsPreFsCtrl: return "FsPreFsCtrl";
-    case CALLBACK_TYPE::FsPostFsCtrl: return "FsPostFsCtrl";
-    default: return "Unknown";
+    case MINIFILTER_CALLBACK_TYPE::MfUnknown: return "Unknown";
+    case MINIFILTER_CALLBACK_TYPE::MfCreatePre: return "PreCreate";
+    case MINIFILTER_CALLBACK_TYPE::MfCreatePost: return "PostCreate";
+    case MINIFILTER_CALLBACK_TYPE::MfClosePre: return "PreClose";
+    case MINIFILTER_CALLBACK_TYPE::MfClosePost: return "PostClose";
+    case MINIFILTER_CALLBACK_TYPE::MfReadPre: return "PreRead";
+    case MINIFILTER_CALLBACK_TYPE::MfReadPost: return "PostRead";
+    case MINIFILTER_CALLBACK_TYPE::MfWritePre: return "PreWrite";
+    case MINIFILTER_CALLBACK_TYPE::MfWritePost: return "PostWrite";
+    case MINIFILTER_CALLBACK_TYPE::MfQueryInformationPre: return "PreQueryInformation";
+    case MINIFILTER_CALLBACK_TYPE::MfQueryInformationPost: return "PostQueryInformation";
+    case MINIFILTER_CALLBACK_TYPE::MfSetInformationPre: return "PreSetInformation";
+    case MINIFILTER_CALLBACK_TYPE::MfSetInformationPost: return "PostSetInformation";
+    case MINIFILTER_CALLBACK_TYPE::MfDirectoryControlPre: return "PreDirectoryControl";
+    case MINIFILTER_CALLBACK_TYPE::MfDirectoryControlPost: return "PostDirectoryControl";
+    case MINIFILTER_CALLBACK_TYPE::MfFileSystemControlPre: return "PreFileSystemControl";
+    case MINIFILTER_CALLBACK_TYPE::MfFileSystemControlPost: return "PostFileSystemControl";
+    default: return "Other";
     }
 }
 
 // Function to print callback information
 void PrintCallbackInfo(const CALLBACK_INFO_SHARED& callbackInfo) {
     std::cout << "Callback: " << callbackInfo.CallbackName << std::endl;
-    std::cout << "  Type: " << GetCallbackTypeString(callbackInfo.Type) << std::endl;
+    std::cout << "  Type: " << GetMinifilterCallbackTypeString(callbackInfo.Type) << std::endl;
     std::cout << "  Address: 0x" << std::hex << callbackInfo.Address << std::dec << std::endl;
     std::cout << "  Module: " << callbackInfo.ModuleName << std::endl;
-    std::cout << "  Context: 0x" << std::hex << callbackInfo.Context << std::dec << std::endl;
     std::cout << std::endl;
 }
 
 // Function to write callback information to a file
 void WriteCallbackToFile(std::ofstream& outFile, const CALLBACK_INFO_SHARED& callbackInfo) {
     outFile << "Callback: " << callbackInfo.CallbackName << std::endl;
-    outFile << "  Type: " << GetCallbackTypeString(callbackInfo.Type) << std::endl;
+    outFile << "  Type: " << GetMinifilterCallbackTypeString(callbackInfo.Type) << std::endl;
     outFile << "  Address: 0x" << std::hex << callbackInfo.Address << std::dec << std::endl;
     outFile << "  Module: " << callbackInfo.ModuleName << std::endl;
-    outFile << "  Context: 0x" << std::hex << callbackInfo.Context << std::dec << std::endl;
     outFile << std::endl;
 }
 
@@ -420,7 +379,7 @@ bool GetDriverCallbacks() {
 // Function to print callback information with module lookup using symbols
 void PrintSymbolCallbackInfo(const CALLBACK_INFO_SHARED& callbackInfo, HANDLE hProcess) {
     std::cout << "Callback: " << callbackInfo.CallbackName << std::endl;
-    std::cout << "  Type: " << GetCallbackTypeString(callbackInfo.Type) << std::endl;
+    std::cout << "  Type: " << GetMinifilterCallbackTypeString(callbackInfo.Type) << std::endl;
     std::cout << "  Address: 0x" << std::hex << callbackInfo.Address << std::dec << std::endl;
     
     // Try to get more info from symbols
@@ -448,7 +407,6 @@ void PrintSymbolCallbackInfo(const CALLBACK_INFO_SHARED& callbackInfo, HANDLE hP
     }
     
     std::cout << "  Module: " << callbackInfo.ModuleName << std::endl;
-    std::cout << "  Context: 0x" << std::hex << callbackInfo.Context << std::dec << std::endl;
     std::cout << std::endl;
 }
 
@@ -487,27 +445,17 @@ bool ReadKernelMemory(HANDLE deviceHandle, PVOID kernelAddress, PVOID buffer, SI
 
 // Function to get Windows version information
 bool GetWindowsVersion(DWORD& buildNumber) {
-    NTSTATUS(WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW);
-    RTL_OSVERSIONINFOW osvi = { 0 };
-    osvi.dwOSVersionInfoSize = sizeof(osvi);
-    
-    // Get RtlGetVersion dynamically as it's always available
-    *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGetVersion");
-    if (RtlGetVersion == nullptr) {
-        std::cerr << "Failed to get RtlGetVersion function. Error: " << GetLastError() << std::endl;
-        return false;
+    OSVERSIONINFOEX osvi = { sizeof(OSVERSIONINFOEX) };
+    NTSTATUS(WINAPI * RtlGetVersion)(PRTL_OSVERSIONINFOW);
+    *(FARPROC*)&RtlGetVersion = GetProcAddress(GetModuleHandleA("ntdll"), "RtlGetVersion");
+    if (RtlGetVersion != nullptr) {
+        RtlGetVersion((PRTL_OSVERSIONINFOW)&osvi);
+        buildNumber = osvi.dwBuildNumber;
+        std::cout << "Windows Version: " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion
+                  << " (Build " << osvi.dwBuildNumber << ")" << std::endl;
+        return true;
     }
-    
-    if (RtlGetVersion(&osvi) != 0) { // STATUS_SUCCESS is 0
-        std::cerr << "RtlGetVersion failed" << std::endl;
-        return false;
-    }
-    
-    buildNumber = osvi.dwBuildNumber;
-    std::cout << "Windows Version: " << osvi.dwMajorVersion << "." << osvi.dwMinorVersion
-              << " (Build " << osvi.dwBuildNumber << ")" << std::endl;
-    
-    return true; // Added missing return on success
+    return false;
 }
 
 // Function to find callback table addresses based on Windows version
@@ -517,43 +465,9 @@ bool GetCallbackAddressByWindowsVersion(PVOID kernelBase, CALLBACK_TABLE_TYPE ca
         return false;
     }
     
-    // Find matching version in our known offsets tabled
-    int matchIdx = -1;
-    for (int i = 0; i < KnownCallbackOffsetCount; i++) {
-        if (KnownCallbackOffsets[i].BuildNumber == buildNumber) {
-            matchIdx = i;
-            break;
-        }
-    }
-    
-    if (matchIdx == -1) {
-        std::cerr << "No known callback offsets for Windows build " << buildNumber << std::endl;
-        return false;
-    }
-    
-    // Calculate address based on kernel base and appropriate offset
-    ULONG_PTR offset = 0;
-    switch (callbackType) {
-        case CallbackTableLoadImage:
-            offset = KnownCallbackOffsets[matchIdx].LoadImageOffset;
-            break;
-        case CallbackTableCreateProcess:
-            offset = KnownCallbackOffsets[matchIdx].ProcessCreateOffset;
-            break;
-        case CallbackTableRegistry:
-            offset = KnownCallbackOffsets[matchIdx].RegistryOffset;
-            break;
-        default:
-            std::cerr << "Unsupported callback type for hardcoded addresses" << std::endl;
-            return false;
-    }
-    
-    callbackAddress = (PVOID)((ULONG_PTR)kernelBase + offset);
-    std::cout << "Using hardcoded address for " << KnownCallbackOffsets[matchIdx].Description
-              << " at offset 0x" << std::hex << offset << std::dec
-              << " (full address: 0x" << std::hex << callbackAddress << std::dec << ")" << std::endl;
-    
-    return true; // Added missing return on success
+    // For now, we'll return false since we don't have the KnownCallbackOffsets table
+    std::cerr << "Callback offset lookup not implemented for Windows build " << buildNumber << std::endl;
+    return false;
 }
 
 // Function to enumerate callbacks using the DbgHelp symbols approach
@@ -745,15 +659,8 @@ bool EnumerateCallbacksWithSymbols(HANDLE deviceHandle, CALLBACK_TABLE_TYPE call
         // If symbol lookup (direct and enumeration) failed, try hardcoded address
         // But only for ntoskrnl.exe since we only have hardcoded offsets for it
         if (!symbolFound && _wcsicmp(moduleName, L"ntoskrnl.exe") == 0) {
-            std::cout << "Symbol lookup failed, attempting fallback using hardcoded offsets for ntoskrnl.exe..." << std::endl;
-            PVOID hardcodedAddress = NULL;
-            if (GetCallbackAddressByWindowsVersion(moduleBase, callbackType, hardcodedAddress)) {
-                 symbolPackage.si.Address = (ULONG64)hardcodedAddress;
-                 symbolFound = true;
-                 std::cout << "Using hardcoded address: 0x" << std::hex << hardcodedAddress << std::dec << std::endl;
-            } else {
-                 std::cerr << "Failed to get hardcoded address for this Windows version." << std::endl;
-            }
+            std::cout << "Symbol lookup failed for ntoskrnl.exe. Please ensure symbols are properly configured." << std::endl;
+            symbolFound = false;
         }
         
         // If symbol lookup failed and no hardcoded address, we fail
@@ -810,7 +717,28 @@ bool EnumerateCallbacksWithSymbols(HANDLE deviceHandle, CALLBACK_TABLE_TYPE call
     
     // Print callback information
     for (ULONG i = 0; i < request->FoundCallbacks; i++) {
-        PrintSymbolCallbackInfo(request->Callbacks[i], hProcess);
+        PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
+        
+        std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
+        std::cout << "    Name: " << info->CallbackName << std::endl;
+        std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
+        
+        // Try to get symbol information if possible
+        char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = MAX_SYM_NAME;
+        
+        DWORD64 displacement = 0;
+        if (SymFromAddr(hProcess, (DWORD64)info->Address, &displacement, pSymbol)) {
+            std::cout << "    Symbol: " << pSymbol->Name;
+            if (displacement > 0) {
+                std::cout << " + 0x" << std::hex << displacement << std::dec;
+            }
+            std::cout << std::endl;
+        }
+        
+        std::cout << std::endl;
     }
     
     SymCleanup(hProcess);
@@ -1905,10 +1833,6 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
         std::cout << "    Name: " << info->CallbackName << std::endl;
         std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
         
-        if (info->Context != 0) {
-            std::cout << "    Context: 0x" << std::hex << info->Context << std::dec << std::endl;
-        }
-        
         // Try to get symbol information if possible
         char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
         PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
@@ -1945,251 +1869,8 @@ bool TryEnumerateRegistryCallbacks(HANDLE deviceHandle) {
         std::cout << "Failed with symbol: " << ALT_REGISTRY_CALLBACKS[i] << std::endl;
     }
     
-    // Get ntoskrnl.exe base address - we'll need this for both approaches below
-    const DWORD bufferSize = sizeof(MODULE_INFO) * CLIENT_MAX_MODULES;
-    std::vector<BYTE> buffer(bufferSize, 0);
-    PMODULE_INFO moduleInfos = reinterpret_cast<PMODULE_INFO>(buffer.data());
-
-    DWORD bytesReturned = 0;
-    BOOL success = DeviceIoControl(
-        deviceHandle,
-        IOCTL_GET_MODULES,
-        NULL, 0,
-        moduleInfos, bufferSize,
-        &bytesReturned,
-        NULL
-    );
-    
-    if (!success) {
-        std::cerr << "Failed to get modules. Error code: " << GetLastError() << std::endl;
-        return false;
-    }
-    
-    DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
-    PVOID ntosAddr = NULL;
-    
-    // Find ntoskrnl.exe
-    for (DWORD i = 0; i < moduleCount; i++) {
-        std::wstring path = moduleInfos[i].Path;
-        std::transform(path.begin(), path.end(), path.begin(), ::towlower);
-        
-        if (path.find(L"ntoskrnl.exe") != std::wstring::npos || 
-            path.find(L"ntkrnlmp.exe") != std::wstring::npos ||
-            path.find(L"ntkrnlpa.exe") != std::wstring::npos) {
-            ntosAddr = moduleInfos[i].BaseAddress;
-            break;
-        }
-    }
-    
-    if (!ntosAddr) {
-        std::cerr << "Failed to find ntoskrnl.exe module" << std::endl;
-        return false;
-    }
-    
-    // Check if we found CmpCallbackListLock but enumeration failed
-    // On some systems (particularly Server 2022), CmpCallbackListLock is found
-    // but we need to adjust the address to find the actual list head
-    HANDLE hProcess = GetCurrentProcess();
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
-    
-    if (SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
-        // Load ntoskrnl symbols
-        DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, "ntoskrnl.exe", NULL, (DWORD64)ntosAddr, 0, NULL, 0);
-        if (baseAddr != 0 || GetLastError() == ERROR_SUCCESS) {
-            // Try to find CmpCallbackListLock 
-            SYMBOL_INFO_PACKAGE lockSymbolInfo = { 0 };
-            lockSymbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
-            lockSymbolInfo.si.MaxNameLen = MAX_SYM_NAME;
-            
-            if (SymFromName(hProcess, "CmpCallbackListLock", &lockSymbolInfo.si)) {
-                std::cout << "Found CmpCallbackListLock at: 0x" << std::hex << lockSymbolInfo.si.Address << std::dec << std::endl;
-                
-                // The CallbackListHead is usually 0x10 bytes after the lock on Server 2022
-                PVOID adjustedAddress = (PVOID)(lockSymbolInfo.si.Address + 0x10);
-                std::cout << "Trying registry callback list at adjusted address: 0x" 
-                          << std::hex << adjustedAddress << std::dec << std::endl;
-                
-                // Calculate required size for the request
-                const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
-                ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
-                
-                // Allocate request buffer
-                std::vector<BYTE> requestBuffer(requestSize, 0);
-                PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-                
-                // Initialize request
-                request->Type = CallbackTableRegistry;
-                request->TableAddress = adjustedAddress;
-                request->MaxCallbacks = maxCallbacks;
-                
-                // Send request to driver
-                bytesReturned = 0;
-                success = DeviceIoControl(
-                    deviceHandle,
-                    IOCTL_ENUM_CALLBACKS,
-                    request, requestSize,
-                    request, requestSize,
-                    &bytesReturned,
-                    nullptr
-                );
-                
-                if (!success) {
-                    std::cerr << "Failed to enumerate callbacks with adjusted address. Error code: " << GetLastError() << std::endl;
-                }
-                else {
-                    // Display results
-                    std::cout << "Retrieved " << request->FoundCallbacks << " registry callbacks using adjusted address" << std::endl;
-                    
-                    std::cout << std::endl << "==== Registry Callbacks ====" << std::endl << std::endl;
-                    
-                    // Print callback information
-                    for (ULONG i = 0; i < request->FoundCallbacks; i++) {
-                        PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
-                        
-                        std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
-                        std::cout << "    Name: " << info->CallbackName << std::endl;
-                        std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
-                        
-                        if (info->Context != 0) {
-                            std::cout << "    Context: 0x" << std::hex << info->Context << std::dec << std::endl;
-                        }
-                        
-                        std::cout << std::endl;
-                    }
-                    
-                    SymCleanup(hProcess);
-                    return request->FoundCallbacks > 0;
-                }
-            }
-        }
-        SymCleanup(hProcess);
-    }
-    
-    // If all other methods fail, attempt to scan for the registry callback list
-    PVOID scanCallbackAddress = NULL;
-    if (AttemptScanForCallbackList(deviceHandle, ntosAddr, scanCallbackAddress)) {
-        std::cout << "Attempting to enumerate callbacks using scanned registry callback list at: 0x" 
-                  << std::hex << scanCallbackAddress << std::dec << std::endl;
-                  
-        // Calculate required size for the request
-        const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
-        ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
-        
-        // Allocate request buffer
-        std::vector<BYTE> requestBuffer(requestSize, 0);
-        PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-        
-        // Initialize request
-        request->Type = CallbackTableRegistry;
-        request->TableAddress = scanCallbackAddress;
-        request->MaxCallbacks = maxCallbacks;
-        
-        // Send request to driver
-        bytesReturned = 0;
-        success = DeviceIoControl(
-            deviceHandle,
-            IOCTL_ENUM_CALLBACKS,
-            request, requestSize,
-            request, requestSize,
-            &bytesReturned,
-            nullptr
-        );
-        
-        if (!success) {
-            std::cerr << "Failed to enumerate callbacks using scanned address. Error code: " << GetLastError() << std::endl;
-        }
-        else {
-            // Display results
-            std::cout << "Retrieved " << request->FoundCallbacks << " registry callbacks using scanned address" << std::endl;
-            
-            std::cout << std::endl << "==== Registry Callbacks ====" << std::endl << std::endl;
-            
-            // Print callback information
-            for (ULONG i = 0; i < request->FoundCallbacks; i++) {
-                PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
-                
-                std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
-                std::cout << "    Name: " << info->CallbackName << std::endl;
-                std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
-                
-                if (info->Context != 0) {
-                    std::cout << "    Context: 0x" << std::hex << info->Context << std::dec << std::endl;
-                }
-                
-                std::cout << std::endl;
-            }
-            
-            return true;
-        }
-    }
-    
-    // If the Windows version is known, try using a hardcoded offset
-    DWORD buildNumber = 0;
-    if (GetWindowsVersion(buildNumber)) {
-        std::cout << "Trying registry callback enumeration using known Windows build " << buildNumber << " offsets..." << std::endl;
-        
-        // Try to get the callback address by OS version
-        PVOID callbackAddress = NULL;
-        if (GetCallbackAddressByWindowsVersion(ntosAddr, CallbackTableRegistry, callbackAddress)) {
-            std::cout << "Found registry callback table using Windows version offset at: 0x" 
-                      << std::hex << callbackAddress << std::dec << std::endl;
-                      
-            // Calculate required size for the request
-            const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
-            ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
-            
-            // Allocate request buffer
-            std::vector<BYTE> requestBuffer(requestSize, 0);
-            PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-            
-            // Initialize request
-            request->Type = CallbackTableRegistry;
-            request->TableAddress = callbackAddress;
-            request->MaxCallbacks = maxCallbacks;
-            
-            // Send request to driver
-            bytesReturned = 0;
-            success = DeviceIoControl(
-                deviceHandle,
-                IOCTL_ENUM_CALLBACKS,
-                request, requestSize,
-                request, requestSize,
-                &bytesReturned,
-                nullptr
-            );
-            
-            if (!success) {
-                std::cerr << "Failed to enumerate callbacks with hardcoded offset. Error code: " << GetLastError() << std::endl;
-            }
-            else {
-                // Display results
-                std::cout << "Retrieved " << request->FoundCallbacks << " registry callbacks using hardcoded offset" << std::endl;
-                
-                std::cout << std::endl << "==== Registry Callbacks ====" << std::endl << std::endl;
-                
-                // Print callback information
-                for (ULONG i = 0; i < request->FoundCallbacks; i++) {
-                    PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
-                    
-                    std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
-                    std::cout << "    Name: " << info->CallbackName << std::endl;
-                    std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
-                    
-                    if (info->Context != 0) {
-                        std::cout << "    Context: 0x" << std::hex << info->Context << std::dec << std::endl;
-                    }
-                    
-                    std::cout << std::endl;
-                }
-                
-                return true;
-            }
-        }
-    }
-    
     std::cout << "All registry callback enumeration methods failed." << std::endl;
-    std::cout << "You may need to update the symbol names or hardcoded offsets for your Windows version." << std::endl;
-    std::cout << "For Windows Server 2022 (Build 20348), try manually adding the offset: 0x50D540" << std::endl;
+    std::cout << "Please ensure symbols are properly configured and try again." << std::endl;
     return false;
 }
 
@@ -2197,7 +1878,7 @@ bool TryEnumerateRegistryCallbacks(HANDLE deviceHandle) {
 bool AttemptScanForCallbackList(HANDLE deviceHandle, PVOID kernelBase, PVOID& callbackAddress) {
     std::cout << "Attempting to scan for registry callback list head..." << std::endl;
     
-    // Get the symbols that we found - we know CmpCallbackListLock was found at a specific address
+    // Get the symbols that we found
     HANDLE hProcess = GetCurrentProcess();
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
     if (!SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
@@ -2213,19 +1894,6 @@ bool AttemptScanForCallbackList(HANDLE deviceHandle, PVOID kernelBase, PVOID& ca
         return false;
     }
     
-    // Try to find CmpCallbackListLock 
-    SYMBOL_INFO_PACKAGE lockSymbolInfo = { 0 };
-    lockSymbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
-    lockSymbolInfo.si.MaxNameLen = MAX_SYM_NAME;
-    
-    if (!SymFromName(hProcess, "CmpCallbackListLock", &lockSymbolInfo.si)) {
-        std::cerr << "Failed to find CmpCallbackListLock during scan" << std::endl;
-        SymCleanup(hProcess);
-        return false;
-    }
-    
-    std::cout << "Found CmpCallbackListLock at: 0x" << std::hex << lockSymbolInfo.si.Address << std::dec << std::endl;
-    
     // Try to find CallbackListHead
     SYMBOL_INFO_PACKAGE listSymbolInfo = { 0 };
     listSymbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
@@ -2239,30 +1907,9 @@ bool AttemptScanForCallbackList(HANDLE deviceHandle, PVOID kernelBase, PVOID& ca
     
     std::cout << "Found CallbackListHead at: 0x" << std::hex << listSymbolInfo.si.Address << std::dec << std::endl;
     
-    // If we found both symbols, calculate their relationship
-    ULONG_PTR lockOffset = lockSymbolInfo.si.Address - (ULONG_PTR)kernelBase;
-    ULONG_PTR listOffset = listSymbolInfo.si.Address - (ULONG_PTR)kernelBase;
-    
-    std::cout << "CmpCallbackListLock offset from kernel base: 0x" << std::hex << lockOffset << std::dec << std::endl;
-    std::cout << "CallbackListHead offset from kernel base: 0x" << std::hex << listOffset << std::dec << std::endl;
-    std::cout << "Relationship: CallbackListHead is " << (listOffset > lockOffset ? "after" : "before") 
-              << " CmpCallbackListLock by 0x" << std::hex << (listOffset > lockOffset ? 
-                  listOffset - lockOffset : lockOffset - listOffset) << std::dec << " bytes" << std::endl;
-    
-    // For Windows Server 2022, the list head is typically 0x10 bytes after the list lock
-    if (listSymbolInfo.si.Address > lockSymbolInfo.si.Address && 
-        (listSymbolInfo.si.Address - lockSymbolInfo.si.Address) == 0x10) {
-        callbackAddress = (PVOID)listSymbolInfo.si.Address;
-        std::cout << "Using CallbackListHead at 0x" << std::hex << callbackAddress << std::dec 
-                  << " as it appears to match expected pattern" << std::endl;
-        SymCleanup(hProcess);
-        return true;
-    }
-    
-    // If we can't be sure based on known patterns, just use the list head we found
+    // Use the list head we found
     callbackAddress = (PVOID)listSymbolInfo.si.Address;
-    std::cout << "Using CallbackListHead at 0x" << std::hex << callbackAddress 
-              << std::dec << " (caution: may not be correct)" << std::endl;
+    std::cout << "Using CallbackListHead at 0x" << std::hex << callbackAddress << std::dec << std::endl;
     
     SymCleanup(hProcess);
     return true;
