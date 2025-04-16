@@ -2,6 +2,8 @@
 
 The Elemetry Client is a Windows application that communicates with the Elemetry Driver to enumerate kernel modules and callback routines.
 
+> NOTE: currently requires ntoskrnl in cwd
+
 ## Features
 
 - Enumerate kernel modules loaded in the system
