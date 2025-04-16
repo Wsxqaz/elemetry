@@ -1,5 +1,5 @@
 @echo off
-echo Building and signing TelemetrySourcerer Driver...
+echo Building and signing elemetry Driver...
 
 REM Build the driver
 msbuild elemetryDriver.vcxproj /p:Configuration=Debug /p:Platform=x64
@@ -17,7 +17,7 @@ if not exist "x64\Debug\elemetryDriver.sys" (
 
 REM Sign the driver
 echo Signing the driver...
-signtool sign /v /s TestCertStore /n TestCert /fd sha256 /tr http://timestamp.digicert.com /td sha256 /d "TelemetrySourcerer Driver" "x64\Debug\elemetryDriver.sys"
+signtool sign /v /s TestCertStore /n TestCert /fd sha256 /tr http://timestamp.digicert.com /td sha256 /d "elemetry Driver" "x64\Debug\elemetryDriver.sys"
 
 if %ERRORLEVEL% NEQ 0 (
     echo Error: Failed to sign the driver.

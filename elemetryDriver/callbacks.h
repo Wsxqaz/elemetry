@@ -27,7 +27,6 @@ NTSTATUS GetDynamicModules(
     _Out_ PULONG BytesWrittenOrRequired
 );
 
-// New function to get system modules similar to TelemetrySourcerer
 NTSTATUS GetSystemModules(
     _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
     _In_ ULONG OutputBufferLength,

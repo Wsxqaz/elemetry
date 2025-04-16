@@ -18,42 +18,27 @@ The Elemetry Client is a Windows application that communicates with the Elemetry
 - Windows Driver Kit (optional, for driver development)
 - Debugging Tools for Windows (part of the Windows SDK)
 
-### Build Steps
+### Building with Visual Studio
 
-1. Open a Developer Command Prompt for Visual Studio
-2. Navigate to the elemetryClient directory
-3. Run the build script:
+1. **Open Solution**:
+   - Open `elemetry.sln` in Visual Studio
+   - Select the `elemetryClient` project in Solution Explorer
 
-```
-build.bat
-```
 
-The build script will:
-- Find your Visual Studio installation
-- Build the application for x64 Debug by default
-- Copy necessary debug DLLs like symsrv.dll to the output directory
-- Create a symbol cache directory if needed
+### Build Verification 
 
-### Build Configuration
+After building:
 
-You can specify the platform and configuration as arguments:
+1. Check output directory contains:
+   - elemetryClient.exe
+   - symsrv.dll
+   - dbghelp.dll
+   - Other required DLLs
 
-```
-build.bat [Platform] [Configuration]
-```
+2. Test basic execution:
+   - Run from command prompt as Administrator
+   - Should show main menu without errors
 
-Example:
-```
-build.bat x64 Release
-```
-
-## Running the Application
-
-After building, run the application using:
-
-```
-run.bat
-```
 
 Make sure the Elemetry Driver is loaded before running the client application.
 
@@ -68,12 +53,7 @@ For proper symbol resolution, the application needs:
 1. **Symbol Server DLLs**: 
    - symsrv.dll
    - dbghelp.dll
-   - symstore.dll
    - dbgcore.dll
-
-2. **Symbol Cache Directory**:
-   - The application uses C:\Symbols as a cache for downloaded symbols
-   - This directory is created automatically during build
 
 ### Symbol Troubleshooting
 
@@ -111,12 +91,7 @@ If the application can't load symbols:
 
 3. **Symbol lookup failures**
    - Verify internet connectivity to Microsoft Symbol Server
-   - Check that C:\Symbols directory exists and is writable
    - Ensure Windows SDK is properly installed with Debugging Tools
-
-## License
-
-This project is available for educational purposes only.
 
 ## Acknowledgements
 
