@@ -12,6 +12,7 @@
 #include <fltKernel.h>
 #include <ntddk.h>
 #include <ntifs.h>
+#include <aux_klib.h>  // For AuxKlib functions and structures
 
 // Include Common.h FIRST for shared definitions
 #include "Common.h"    // Project common definitions
@@ -39,54 +40,15 @@ CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
 ULONG g_CallbackCount = 0;
 
 // Define the number of hardcoded modules we are looking for
-#define HARDCODED_MODULE_COUNT 36 // Updated count after removing not found modules and duplicates
+#define INITIAL_MODULE_BUFFER_SIZE 1024  // Initial buffer size for module enumeration
 
 // Internal storage for found module information
-static MODULE_INFO g_FoundModules[HARDCODED_MODULE_COUNT];
+static MODULE_INFO* g_FoundModules = NULL;
+static ULONG g_ModuleCount = 0;
 static BOOLEAN g_ModulesInitialized = FALSE;
 
 // Keep const for logic, but use define for array sizes
-const ULONG g_HardcodedModuleCount = HARDCODED_MODULE_COUNT;
-
-// Define the list of hardcoded module names to search for
-static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define here
-    L"ntoskrnl.exe",
-    L"ksecdd.sys",
-    L"cng.sys",
-    L"tcpip.sys",
-    L"dxgkrnl.sys",
-    L"peauth.sys",
-    L"ahcache.sys",
-    L"CI.dll",
-    L"luafv.sys",
-    L"npsvctrig.sys",
-    L"Wof.sys",
-    L"wcifs.sys",
-    L"fltmgr.sys",
-    L"WdFilter.sys",
-    L"bindflt.sys",
-    L"acpiex.sys",
-    L"acpi.sys",
-    L"ataport.sys",
-    L"atapi.sys",
-    L"bootvid.dll",
-    L"clfs.sys",
-    L"disk.sys",
-    L"hal.dll",
-    L"kbdclass.sys",
-    L"mouclass.sys",
-    L"msrpc.sys",
-    L"ndis.sys",
-    L"ntfs.sys",
-    L"partmgr.sys",
-    L"pci.sys",
-    L"pshed.dll",
-    L"storport.sys",
-    L"win32k.sys",
-    L"win32kbase.sys",
-    L"win32kfull.sys",
-    L"dxgmms2.sys"
-};
+const ULONG g_ModuleCountMax = INITIAL_MODULE_BUFFER_SIZE;
 
 // Define static buffers
 #define MODULE_INFO_BUFFER_SIZE 2144  // Size needed for output modules
@@ -194,119 +156,213 @@ static BOOLEAN FindModuleByName(
 }
 
 
-// --- Helper to get hardcoded modules ---
-NTSTATUS GetHardcodedModules(
+// --- Helper to get modules dynamically ---
+NTSTATUS GetDynamicModules(
     _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
     _In_ ULONG OutputBufferLength,
     _Out_ PULONG BytesWrittenOrRequired
 )
 {
     NTSTATUS status = STATUS_SUCCESS;
-    ULONG requiredSize = HARDCODED_MODULE_COUNT * sizeof(MODULE_INFO);
     ULONG foundCount = 0;
 
     // Check if we're at PASSIVE_LEVEL
     KIRQL CurrentIrql = KeGetCurrentIrql();
     if (CurrentIrql > PASSIVE_LEVEL) {
-        DbgPrint("[elemetry] GetHardcodedModules: Running at IRQL %d, need PASSIVE_LEVEL\n", CurrentIrql);
+        DbgPrint("[elemetry] GetDynamicModules: Running at IRQL %d, need PASSIVE_LEVEL\n", CurrentIrql);
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    if (OutputBufferLength < requiredSize) {
-        DbgPrint("[elemetry] GetHardcodedModules: Buffer too small. Required: %u, Provided: %u\n",
-                 requiredSize, OutputBufferLength);
-        *BytesWrittenOrRequired = requiredSize;
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
     if (!OutputBuffer) {
-        DbgPrint("[elemetry] GetHardcodedModules: Invalid output buffer pointer.\n");
+        DbgPrint("[elemetry] GetDynamicModules: Invalid output buffer pointer.\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    // Report how many target modules we are looking for
-    DbgPrint("[elemetry] GetHardcodedModules: Looking for %lu target modules\n", HARDCODED_MODULE_COUNT);
-
     __try {
-        // Use our static buffer for system module information
-        RtlZeroMemory(g_SystemModuleBuffer, SYSTEM_MODULE_BUFFER_SIZE);
-        ULONG SystemInfoLength = SYSTEM_MODULE_BUFFER_SIZE;
-
-        // Ensure we're still at PASSIVE_LEVEL before calling ZwQuerySystemInformation
-        CurrentIrql = KeGetCurrentIrql();
-        if (CurrentIrql > PASSIVE_LEVEL) {
-            DbgPrint("[elemetry] GetHardcodedModules: IRQL changed to %d, aborting\n", CurrentIrql);
-            return STATUS_INVALID_DEVICE_STATE;
+        // Initialize AuxKlib for additional module information
+        status = AuxKlibInitialize();
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] GetDynamicModules: Failed to initialize AuxKlib: 0x%X\n", status);
+            // Continue with ZwQuerySystemInformation as fallback
         }
 
-        status = ZwQuerySystemInformation(SystemModuleInformation, g_SystemModuleBuffer, SystemInfoLength, &SystemInfoLength);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] GetHardcodedModules: Failed to get module information: 0x%X\n", status);
+        // First try with ZwQuerySystemInformation
+        ULONG SystemInfoLength = SYSTEM_MODULE_BUFFER_SIZE;
+        status = ZwQuerySystemInformation(SystemModuleInformation, NULL, 0, &SystemInfoLength);
+        if (status != STATUS_INFO_LENGTH_MISMATCH) {
+            DbgPrint("[elemetry] GetDynamicModules: Failed to get required size: 0x%X\n", status);
             return status;
         }
 
-        // Process modules from static buffer
-        PSYSTEM_MODULE_INFORMATION ModuleInfo = (PSYSTEM_MODULE_INFORMATION)g_SystemModuleBuffer;
+        // Allocate buffer for module information
+        PSYSTEM_MODULE_INFORMATION ModuleInfo = (PSYSTEM_MODULE_INFORMATION)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED,
+            SystemInfoLength,
+            DRIVER_TAG
+        );
+
+        if (!ModuleInfo) {
+            DbgPrint("[elemetry] GetDynamicModules: Failed to allocate module info buffer\n");
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        // Get actual module information
+        status = ZwQuerySystemInformation(SystemModuleInformation, ModuleInfo, SystemInfoLength, &SystemInfoLength);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("[elemetry] GetDynamicModules: Failed to get module information: 0x%X\n", status);
+            ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
+            return status;
+        }
+
+        // Allocate or reallocate internal storage if needed
+        if (!g_FoundModules) {
+            g_FoundModules = (PMODULE_INFO)ExAllocatePool2(
+                POOL_FLAG_NON_PAGED,
+                ModuleInfo->Count * sizeof(MODULE_INFO),
+                DRIVER_TAG
+            );
+            if (!g_FoundModules) {
+                DbgPrint("[elemetry] GetDynamicModules: Failed to allocate internal storage\n");
+                ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        } else if (g_ModuleCount < ModuleInfo->Count) {
+            ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
+            g_FoundModules = (PMODULE_INFO)ExAllocatePool2(
+                POOL_FLAG_NON_PAGED,
+                ModuleInfo->Count * sizeof(MODULE_INFO),
+                DRIVER_TAG
+            );
+            if (!g_FoundModules) {
+                DbgPrint("[elemetry] GetDynamicModules: Failed to reallocate internal storage\n");
+                ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
 
         // Zero out the internal storage before populating
-        RtlZeroMemory(g_FoundModules, sizeof(g_FoundModules));
+        RtlZeroMemory(g_FoundModules, ModuleInfo->Count * sizeof(MODULE_INFO));
 
-        // Iterate through the target module names
-        for (ULONG targetIndex = 0; targetIndex < HARDCODED_MODULE_COUNT; ++targetIndex) {
-            MODULE_INFO tempModuleInfo = {0}; // Temporary storage for FindModuleByName
-            BOOLEAN found = FALSE;
-
-            // Skip user-mode DLLs as they won't be in kernel space
-            if (wcscmp(g_HardcodedModules[targetIndex], L"ntdll.dll") == 0 ||
-                wcscmp(g_HardcodedModules[targetIndex], L"kernel32.dll") == 0 ||
-                wcscmp(g_HardcodedModules[targetIndex], L"kernelbase.dll") == 0 ||
-                wcscmp(g_HardcodedModules[targetIndex], L"advapi32.dll") == 0 ||
-                wcscmp(g_HardcodedModules[targetIndex], L"user32.dll") == 0 ||
-                wcscmp(g_HardcodedModules[targetIndex], L"gdi32.dll") == 0) {
-                DbgPrint("[elemetry] GetHardcodedModules: Skipping user-mode module %S\n", g_HardcodedModules[targetIndex]);
+        // Process each module from ZwQuerySystemInformation
+        for (ULONG i = 0; i < ModuleInfo->Count; i++) {
+            // Skip modules with NULL base address
+            if (ModuleInfo->Modules[i].ImageBase == NULL) {
                 continue;
             }
 
-            // Compare the current module's name (lowercase) with the target name (lowercase)
-            found = FindModuleByName(ModuleInfo->Modules, ModuleInfo->Count, g_HardcodedModules[targetIndex], &tempModuleInfo);
-            
-            if (found) {
-                DbgPrint("[elemetry] GetHardcodedModules: Found module %S at %p\n",
-                         g_HardcodedModules[targetIndex], tempModuleInfo.BaseAddress);
-                // Copy found info to internal storage AND output buffer if provided
-                RtlCopyMemory(&g_FoundModules[targetIndex], &tempModuleInfo, sizeof(MODULE_INFO));
-                if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
-                    RtlCopyMemory(&OutputBuffer[foundCount], &tempModuleInfo, sizeof(MODULE_INFO));
-                }
-                foundCount++;
-            } else {
-                DbgPrint("[elemetry] GetHardcodedModules: Module %S not found\n", g_HardcodedModules[targetIndex]);
-                // Still store placeholder info in internal storage
-                g_FoundModules[targetIndex].BaseAddress = NULL;
-                g_FoundModules[targetIndex].Size = 0;
-                g_FoundModules[targetIndex].Flags = 0;
-                wcscpy_s(g_FoundModules[targetIndex].Path, MAX_PATH, g_HardcodedModules[targetIndex]);
+            // Store module information
+            g_FoundModules[foundCount].BaseAddress = ModuleInfo->Modules[i].ImageBase;
+            g_FoundModules[foundCount].Size = ModuleInfo->Modules[i].ImageSize;
+            g_FoundModules[foundCount].Flags = 0;
 
-                // Also copy placeholder to output buffer if provided
-                if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
-                    RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[targetIndex], sizeof(MODULE_INFO));
+            // Convert module name from ANSI to Unicode
+            ANSI_STRING ansiName;
+            UNICODE_STRING unicodeName;
+            RtlInitAnsiString(&ansiName, ModuleInfo->Modules[i].ImageName);
+            RtlAnsiStringToUnicodeString(&unicodeName, &ansiName, TRUE);
+
+            // Copy the module path
+            wcscpy_s(g_FoundModules[foundCount].Path, MAX_PATH, unicodeName.Buffer);
+            RtlFreeUnicodeString(&unicodeName);
+
+            // Copy to output buffer if provided and there's space
+            if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
+                RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[foundCount], sizeof(MODULE_INFO));
+            }
+
+            foundCount++;
+        }
+
+        // Now try with AuxKlib for additional modules
+        if (NT_SUCCESS(AuxKlibInitialize())) {
+            ULONG AuxModulesBufferSize = 0;
+            status = AuxKlibQueryModuleInformation(&AuxModulesBufferSize, sizeof(AUX_MODULE_EXTENDED_INFO), nullptr);
+            if (NT_SUCCESS(status) && AuxModulesBufferSize > 0) {
+                PAUX_MODULE_EXTENDED_INFO AuxModuleInfo = (PAUX_MODULE_EXTENDED_INFO)ExAllocatePool2(
+                    POOL_FLAG_NON_PAGED,
+                    AuxModulesBufferSize,
+                    DRIVER_TAG
+                );
+
+                if (AuxModuleInfo) {
+                    status = AuxKlibQueryModuleInformation(&AuxModulesBufferSize, sizeof(AUX_MODULE_EXTENDED_INFO), AuxModuleInfo);
+                    if (NT_SUCCESS(status)) {
+                        ULONG AuxModuleCount = AuxModulesBufferSize / sizeof(AUX_MODULE_EXTENDED_INFO);
+                        
+                        // Check for modules not found in the first enumeration
+                        for (ULONG i = 0; i < AuxModuleCount; i++) {
+                            BOOLEAN alreadyFound = FALSE;
+                            
+                            // Check if this module was already found
+                            for (ULONG j = 0; j < foundCount; j++) {
+                                if (g_FoundModules[j].BaseAddress == AuxModuleInfo[i].BasicInfo.ImageBase) {
+                                    alreadyFound = TRUE;
+                                    break;
+                                }
+                            }
+                            
+                            if (!alreadyFound) {
+                                // Reallocate internal storage if needed
+                                if (foundCount >= g_ModuleCount) {
+                                    PMODULE_INFO newModules = (PMODULE_INFO)ExAllocatePool2(
+                                        POOL_FLAG_NON_PAGED,
+                                        (foundCount + 1) * sizeof(MODULE_INFO),
+                                        DRIVER_TAG
+                                    );
+                                    if (!newModules) {
+                                        DbgPrint("[elemetry] GetDynamicModules: Failed to reallocate for additional modules\n");
+                                        break;
+                                    }
+                                    
+                                    RtlCopyMemory(newModules, g_FoundModules, foundCount * sizeof(MODULE_INFO));
+                                    ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
+                                    g_FoundModules = newModules;
+                                    g_ModuleCount = foundCount + 1;
+                                }
+                                
+                                // Store the new module
+                                g_FoundModules[foundCount].BaseAddress = AuxModuleInfo[i].BasicInfo.ImageBase;
+                                g_FoundModules[foundCount].Size = AuxModuleInfo[i].ImageSize;
+                                g_FoundModules[foundCount].Flags = 0;
+                                
+                                // Convert and copy the module path
+                                ANSI_STRING ansiName;
+                                UNICODE_STRING unicodeName;
+                                RtlInitAnsiString(&ansiName, (PCSZ)AuxModuleInfo[i].FullPathName);
+                                RtlAnsiStringToUnicodeString(&unicodeName, &ansiName, TRUE);
+                                wcscpy_s(g_FoundModules[foundCount].Path, MAX_PATH, unicodeName.Buffer);
+                                RtlFreeUnicodeString(&unicodeName);
+                                
+                                // Copy to output buffer if provided and there's space
+                                if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
+                                    RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[foundCount], sizeof(MODULE_INFO));
+                                }
+                                
+                                foundCount++;
+                            }
+                        }
+                    }
+                    
+                    ExFreePoolWithTag(AuxModuleInfo, DRIVER_TAG);
                 }
-                // Increment foundCount even if not found, as we return placeholders
-                foundCount++;
             }
         }
+
+        // Update module count
+        g_ModuleCount = foundCount;
 
         // Mark modules as initialized
         g_ModulesInitialized = TRUE;
 
-        // Report how many were found (note: this now reports total attempted, not just successfully found)
-        DbgPrint("[elemetry] GetHardcodedModules: Processed %lu of %lu target modules\n", foundCount, HARDCODED_MODULE_COUNT);
+        // Report how many were found
+        DbgPrint("[elemetry] GetDynamicModules: Found %lu modules\n", foundCount);
 
-        *BytesWrittenOrRequired = foundCount * sizeof(MODULE_INFO); // Return size based on entries processed
+        *BytesWrittenOrRequired = foundCount * sizeof(MODULE_INFO);
+        ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
         return STATUS_SUCCESS;
     }
     __except(EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("[elemetry] GetHardcodedModules: Exception during module enumeration\n");
+        DbgPrint("[elemetry] GetDynamicModules: Exception during module enumeration\n");
         return STATUS_UNSUCCESSFUL;
     }
 }
@@ -321,8 +377,8 @@ NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
 
     DbgPrint("[elemetry] HandleGetModulesIOCTL: Received request. Output buffer size: %u\n", OutputBufferLength);
 
-    // Use the GetHardcodedModules function
-    Status = GetHardcodedModules(
+    // Use the GetDynamicModules function
+    Status = GetDynamicModules(
         (PMODULE_INFO)OutputBuffer,
         OutputBufferLength,
         &BytesWrittenOrRequired
@@ -332,7 +388,7 @@ NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
         DbgPrint("[elemetry] HandleGetModulesIOCTL: Buffer too small. Required: %u, Provided: %u\n",
                  BytesWrittenOrRequired, OutputBufferLength);
     } else if (!NT_SUCCESS(Status)) {
-        DbgPrint("[elemetry] HandleGetModulesIOCTL: GetHardcodedModules failed with 0x%X\n", Status);
+        DbgPrint("[elemetry] HandleGetModulesIOCTL: GetDynamicModules failed with 0x%X\n", Status);
     } else {
         ULONG ModuleCount = (OutputBufferLength > 0) ? (BytesWrittenOrRequired / sizeof(MODULE_INFO)) : 0;
         DbgPrint("[elemetry] HandleGetModulesIOCTL: Successfully returned %u modules\n", ModuleCount);
@@ -354,13 +410,13 @@ NTSTATUS InitializeCallbackTracking()
     if (!g_ModulesInitialized) {
         DbgPrint("[elemetry] InitializeCallbackTracking: Modules not initialized, attempting now...\n");
         ULONG bytesWritten = 0;
-        NTSTATUS moduleStatus = GetHardcodedModules(NULL, 0, &bytesWritten); // Call just to populate internal storage
+        NTSTATUS moduleStatus = GetDynamicModules(NULL, 0, &bytesWritten); // Call just to populate internal storage
         if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) { // Ignore buffer too small as we didn't provide one
             DbgPrint("[elemetry] InitializeCallbackTracking: Failed to initialize modules: 0x%X\n", moduleStatus);
             // Continue with potentially NULL addresses, or return error?
             // For now, continue.
         } else if (!g_ModulesInitialized) {
-             DbgPrint("[elemetry] InitializeCallbackTracking: GetHardcodedModules succeeded but flag not set?!");
+             DbgPrint("[elemetry] InitializeCallbackTracking: GetDynamicModules succeeded but flag not set?!");
              // Proceed cautiously
         } else {
              DbgPrint("[elemetry] InitializeCallbackTracking: Modules initialized successfully.");
@@ -371,8 +427,7 @@ NTSTATUS InitializeCallbackTracking()
     RtlZeroMemory(g_CallbackInfo, sizeof(g_CallbackInfo));
     g_CallbackCount = 0;
 
-
-    DbgPrint("[elemetry] Initialization complete. Found %lu modules. Callback registration skipped (using exports now).\n", g_HardcodedModuleCount);
+    DbgPrint("[elemetry] Initialization complete. Found %lu modules. Callback registration skipped (using exports now).\n", g_ModuleCount);
     return STATUS_SUCCESS;
 }
 
@@ -381,18 +436,31 @@ VOID CleanupCallbackTracking()
 {
     DbgPrint("[elemetry] Cleaning up %d callbacks...\n", g_CallbackCount);
     
+    // First, wait for any pending operations to complete
+    LARGE_INTEGER delay;
+    delay.QuadPart = -10000000; // 1 second delay
+    KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    
     // Reset callback count and clear the array
     g_CallbackCount = 0;
     RtlZeroMemory(g_CallbackInfo, sizeof(g_CallbackInfo));
     
     // Clear module information
     DbgPrint("[elemetry] Clearing module information...\n");
-    RtlZeroMemory(g_FoundModules, sizeof(g_FoundModules));
+    if (g_FoundModules) {
+        ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
+        g_FoundModules = NULL;
+    }
+    g_ModuleCount = 0;
     g_ModulesInitialized = FALSE;
     
     // Clear static buffers
     RtlZeroMemory(g_ModuleInfoBuffer, MODULE_INFO_BUFFER_SIZE);
     RtlZeroMemory(g_SystemModuleBuffer, SYSTEM_MODULE_BUFFER_SIZE);
+    
+    // Wait again to ensure all resources are released
+    delay.QuadPart = -10000000; // 1 second delay
+    KeDelayExecutionThread(KernelMode, FALSE, &delay);
     
     DbgPrint("[elemetry] Callback tracking cleanup complete\n");
 }
@@ -774,50 +842,37 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
         return STATUS_INVALID_PARAMETER;
     }
 
-    // Allocate buffer for callback pointers
-    PVOID* callbackPointers = (PVOID*)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                      sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
-                                                      DRIVER_TAG);
-    if (!callbackPointers) {
-        DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to allocate memory\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    RtlZeroMemory(callbackPointers, sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS);
-
-    // Read callback pointers from the table
-    SIZE_T bytesRead = 0;
-
-    // First try with standard read
-    status = ReadProtectedKernelMemory(
-        CallbackTable,
-        callbackPointers,
-        sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
-        &bytesRead
-    );
-
-    // If standard read fails, try protected read
-    if (!NT_SUCCESS(status) || bytesRead < sizeof(PVOID)) {
-        DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Normal read failed, trying protected read\n");
-
-        status = ReadProtectedKernelMemory(
-            CallbackTable,
-            callbackPointers,
-            sizeof(PVOID) * MAX_LOAD_IMAGE_CALLBACKS,
-            &bytesRead
-        );
-    }
-
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to read callback table: 0x%X\n", status);
-        ExFreePoolWithTag(callbackPointers, 'CBpT');
-        return status;
-    }
-
     // Process each callback pointer
     ULONG count = 0;
     for (ULONG i = 0; i < MAX_LOAD_IMAGE_CALLBACKS && count < MaxCallbacks; i++) {
-        if (callbackPointers[i] == NULL || callbackPointers[i] == (PVOID)~0) {
+        // Read the pointer to the callback structure
+        PVOID pointerToCallback = NULL;
+        SIZE_T bytesRead = 0;
+        
+        status = ReadProtectedKernelMemory(
+            (PVOID)((ULONG_PTR)CallbackTable + i * sizeof(PVOID)),
+            &pointerToCallback,
+            sizeof(PVOID),
+            &bytesRead
+        );
+
+        if (!NT_SUCCESS(status) || pointerToCallback == NULL) {
+            continue;
+        }
+
+        // Mask the lower bits and read the actual callback address
+        ULONG_PTR maskedPointer = (ULONG_PTR)pointerToCallback & 0xFFFFFFFFFFFFFFF8;
+        PVOID actualCallback = NULL;
+
+        status = ReadProtectedKernelMemory(
+            (PVOID)maskedPointer,
+            &actualCallback,
+            sizeof(PVOID),
+            &bytesRead
+        );
+
+        if (!NT_SUCCESS(status) || actualCallback == NULL) {
+            DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Failed to read callback function pointer at %p\n", maskedPointer);
             continue;
         }
 
@@ -825,14 +880,14 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
 
         CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::PsLoadImage);
-        CallbackArray[count].Address = callbackPointers[i];
+        CallbackArray[count].Address = actualCallback;
 
         // Get base address to determine which module this callback belongs to
-        ULONG_PTR callbackAddress = (ULONG_PTR)callbackPointers[i];
+        ULONG_PTR callbackAddress = (ULONG_PTR)actualCallback;
         BOOLEAN found = FALSE;
 
         // Try to find which module this callback belongs to
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
@@ -849,7 +904,7 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
 
                     // Set callback name based on offset from module base
                     sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME,
-                             "LoadImageCallback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
+                             "LoadImageCallback+0x%llX", callbackAddress - moduleBase);
 
                     found = TRUE;
                     break;
@@ -861,7 +916,7 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
         if (!found) {
             RtlCopyMemory(CallbackArray[count].ModuleName, "Unknown", sizeof("Unknown"));
             sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME,
-                     "LoadImageCallback@0x%p", callbackPointers[i]);
+                     "LoadImageCallback@0x%p", actualCallback);
         }
 
         count++;
@@ -870,7 +925,6 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
     *FoundCallbacks = count;
     DbgPrint("[elemetry] EnumerateLoadImageCallbacks: Found %u callbacks\n", count);
 
-    ExFreePoolWithTag(callbackPointers, 'CBpT');
     return status;
 }
 
@@ -957,7 +1011,7 @@ NTSTATUS EnumerateCreateProcessCallbacks(
         BOOLEAN found = FALSE;
 
         // Try to find which module this callback belongs to
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
@@ -1083,7 +1137,7 @@ NTSTATUS EnumerateCreateThreadCallbacks(
         BOOLEAN found = FALSE;
 
         // Try to find which module this callback belongs to
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
@@ -1292,7 +1346,7 @@ NTSTATUS EnumerateRegistryCallbacks(
         BOOLEAN found = FALSE;
         
         // Search through our known modules
-        for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
@@ -1629,87 +1683,87 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
     // Get the callback address
     ULONG_PTR callbackAddress = (ULONG_PTR)CallbackInfo->Address;
     
-    // Search through our known modules
-    for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
-        if (g_FoundModules[m].BaseAddress != NULL) {
-            ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
-            ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
-            
-            // Check if callback address is within this module's range
-            if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
-                // Extract just the filename from path
-                WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
-                PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
-                
-                // Convert wide char to char (ASCII only)
-                for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
-                    CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
-                }
-                
-                // Set name based on offset from module base
-                sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
-                        "Callback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
-                
-                break;
-            }
-        }
-    }
+    // Check if it's in session space (0xFFFFB30F...)
+    if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFB30000000000) {
+        // This is a session space callback, likely from a driver
+        // Try to find the closest module in session space
+        ULONG_PTR closestModuleBase = 0;
+        ULONG_PTR smallestDistance = ~0ULL;
+        WCHAR closestModuleName[MAX_PATH] = {0};
 
-    // If module not found, try to determine if it's in a known memory region
-    if (CallbackInfo->ModuleName[0] == '\0') {
-        // Check if it's in the session space (0xFFFFCA00...)
-        if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFCA0000000000) {
-            RtlCopyMemory(CallbackInfo->ModuleName, "SessionSpace", sizeof("SessionSpace"));
-            sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
-                    "Callback@0x%p", CallbackInfo->Address);
-        }
-        // Check if it's in the system space (0xFFFFF800...)
-        else if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFF80000000000) {
-            // Try to find the closest module in system space
-            ULONG_PTR closestModuleBase = 0;
-            ULONG_PTR smallestDistance = ~0ULL;
-            WCHAR closestModuleName[MAX_PATH] = {0};
-
-            for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
-                if (g_FoundModules[m].BaseAddress != NULL) {
-                    ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
-                    if ((moduleBase & 0xFFFF000000000000) == 0xFFFFF80000000000) {
-                        ULONG_PTR distance = (callbackAddress > moduleBase) ? 
-                            (callbackAddress - moduleBase) : (moduleBase - callbackAddress);
-                        if (distance < smallestDistance) {
-                            smallestDistance = distance;
-                            closestModuleBase = moduleBase;
-                            wcscpy_s(closestModuleName, MAX_PATH, g_FoundModules[m].Path);
-                        }
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
+            if (g_FoundModules[m].BaseAddress != NULL) {
+                ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+                if ((moduleBase & 0xFFFF000000000000) == 0xFFFFB30000000000) {
+                    ULONG_PTR distance = (callbackAddress > moduleBase) ? 
+                        (callbackAddress - moduleBase) : (moduleBase - callbackAddress);
+                    if (distance < smallestDistance) {
+                        smallestDistance = distance;
+                        closestModuleBase = moduleBase;
+                        wcscpy_s(closestModuleName, MAX_PATH, g_FoundModules[m].Path);
                     }
                 }
             }
+        }
 
-            if (closestModuleBase != 0 && smallestDistance < 0x1000000) { // Within 16MB
-                // Extract just the filename from path
-                WCHAR* LastBackslash = wcsrchr(closestModuleName, L'\\');
-                PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : closestModuleName;
-                
-                // Convert wide char to char (ASCII only)
-                for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
-                    CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
-                }
-                
+        if (closestModuleBase != 0 && smallestDistance < 0x1000000) { // Within 16MB
+            // Extract just the filename from path
+            WCHAR* LastBackslash = wcsrchr(closestModuleName, L'\\');
+            PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : closestModuleName;
+            
+            // Convert wide char to char (ASCII only)
+            for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
+            }
+            
+            sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                    "LoadImageCallback+0x%llX", callbackAddress - closestModuleBase);
+        } else {
+            // If we can't find a close module, try to determine if it's a known driver
+            // by checking common session space ranges
+            if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFB30F00000000) {
+                RtlCopyMemory(CallbackInfo->ModuleName, "SessionDriver", sizeof("SessionDriver"));
                 sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
-                        "Callback@0x%p (near %S)", CallbackInfo->Address, FileNameOnly);
+                        "LoadImageCallback@0x%p", CallbackInfo->Address);
             } else {
-                RtlCopyMemory(CallbackInfo->ModuleName, "SystemSpace", sizeof("SystemSpace"));
+                RtlCopyMemory(CallbackInfo->ModuleName, "UnknownSession", sizeof("UnknownSession"));
                 sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
-                        "Callback@0x%p", CallbackInfo->Address);
+                        "LoadImageCallback@0x%p", CallbackInfo->Address);
             }
         }
-        // Default to Unknown if we can't determine the region
-        else {
-            RtlCopyMemory(CallbackInfo->ModuleName, "Unknown", sizeof("Unknown"));
-            sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
-                    "Callback@0x%p", CallbackInfo->Address);
+        return;
+    }
+    
+    // Check if it's in system space (0xFFFFF806...)
+    if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFF80000000000) {
+        // Search through our known modules
+        for (ULONG m = 0; m < g_ModuleCount; m++) {
+            if (g_FoundModules[m].BaseAddress != NULL) {
+                ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+                ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
+                
+                if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
+                    // Extract just the filename from path
+                    WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
+                    PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
+                    
+                    // Convert wide char to char (ASCII only)
+                    for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                        CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
+                    }
+                    
+                    sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                            "LoadImageCallback+0x%llX", callbackAddress - moduleBase);
+                    return;
+                }
+            }
         }
     }
+
+    // If we get here, we couldn't determine the module
+    RtlCopyMemory(CallbackInfo->ModuleName, "Unknown", sizeof("Unknown"));
+    sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+            "LoadImageCallback@0x%p", CallbackInfo->Address);
 }
 
 

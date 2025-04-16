@@ -184,32 +184,15 @@ NTSTATUS DispatchDeviceControl(
 
 // Driver entry point
 extern "C"
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
+NTSTATUS DriverEntry(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
+)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
     NTSTATUS status = STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(RegistryPath);
 
-    DbgPrint("[elemetry] Driver loading...\n");
-
-    // Check if we're at PASSIVE_LEVEL
-    KIRQL CurrentIrql = KeGetCurrentIrql();
-    if (CurrentIrql > PASSIVE_LEVEL) {
-        DbgPrint("[elemetry] DriverEntry: Running at IRQL %d, need PASSIVE_LEVEL\n", CurrentIrql);
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    // Initialize system module information early
-    ULONG bytesWritten = 0;
-    NTSTATUS moduleStatus = GetHardcodedModules(NULL, 0, &bytesWritten); // Call to populate internal g_FoundModules
-    if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) {
-        DbgPrint("[elemetry] DriverEntry: Failed to pre-initialize modules: 0x%X\n", moduleStatus);
-        // Proceed anyway, InitializeCallbackTracking will handle NULL bases
-    } else {
-        DbgPrint("[elemetry] DriverEntry: Pre-initialized module information.\n");
-    }
-
-    // Set up driver unload routine
-    DriverObject->DriverUnload = DriverUnload;
+    DbgPrint("[elemetry] DriverEntry: Starting initialization\n");
 
     // Initialize callback tracking
     status = InitializeCallbackTracking();
@@ -218,47 +201,48 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return status;
     }
 
+    // Set up driver object
+    DriverObject->DriverUnload = DriverUnload;
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = DispatchCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = DispatchCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchDeviceControl;
+
     // Create device object
     UNICODE_STRING deviceName;
-    UNICODE_STRING symbolicLinkName;
-
     RtlInitUnicodeString(&deviceName, DEVICE_NAME);
-    RtlInitUnicodeString(&symbolicLinkName, SYMBOLIC_LINK_NAME);
 
     status = IoCreateDevice(
         DriverObject,
         0,
         &deviceName,
         FILE_DEVICE_UNKNOWN,
-        0,
+        FILE_DEVICE_SECURE_OPEN,
         FALSE,
         &g_DeviceObject
     );
 
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] Failed to create device object: 0x%X\n", status);
+        DbgPrint("[elemetry] DriverEntry: Failed to create device object: 0x%X\n", status);
         return status;
     }
 
+    // Set device flags
+    g_DeviceObject->Flags |= DO_BUFFERED_IO;
+    g_DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
     // Create symbolic link
+    UNICODE_STRING symbolicLinkName;
+    RtlInitUnicodeString(&symbolicLinkName, SYMBOLIC_LINK_NAME);
+
     status = IoCreateSymbolicLink(&symbolicLinkName, &deviceName);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] Failed to create symbolic link: 0x%X\n", status);
+        DbgPrint("[elemetry] DriverEntry: Failed to create symbolic link: 0x%X\n", status);
         IoDeleteDevice(g_DeviceObject);
         return status;
     }
 
-    // Set up dispatch routines
-    DriverObject->MajorFunction[IRP_MJ_CREATE] = DispatchCreateClose;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE] = DispatchCreateClose;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchDeviceControl;
-
-    // Set flags for direct I/O
-    g_DeviceObject->Flags |= DO_DIRECT_IO;
-    g_DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    DbgPrint("[elemetry] Driver loaded successfully\n");
-    return STATUS_SUCCESS;
+    DbgPrint("[elemetry] DriverEntry: Initialization complete\n");
+    return status;
 }
 
 // Driver unload routine
@@ -267,32 +251,32 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
     UNREFERENCED_PARAMETER(DriverObject);
     DbgPrint("[elemetry] Driver unloading...\n");
 
-    // Wait a moment to allow any pending operations to complete
-    LARGE_INTEGER delay;
-    delay.QuadPart = -10 * 1000 * 1000; // 1 second in 100ns units (negative for relative time)
-    KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    // First, clean up callback tracking
+    CleanupCallbackTracking();
+    DbgPrint("[elemetry] Cleaned up callback tracking\n");
 
     // Delete symbolic link
     UNICODE_STRING symbolicLinkName;
     RtlInitUnicodeString(&symbolicLinkName, SYMBOLIC_LINK_NAME);
     IoDeleteSymbolicLink(&symbolicLinkName);
-    DbgPrint("[elemetry] Symbolic link deleted\n");
+    DbgPrint("[elemetry] Deleted symbolic link\n");
 
     // Delete device object
     if (g_DeviceObject) {
+        // Delete the device object
         IoDeleteDevice(g_DeviceObject);
         g_DeviceObject = NULL;
-        DbgPrint("[elemetry] Device object deleted\n");
+        DbgPrint("[elemetry] Deleted device object\n");
     }
 
-    // Clean up callback tracking
-    CleanupCallbackTracking();
-    DbgPrint("[elemetry] Callback tracking cleaned up\n");
-
-    // Clear global static buffers
+    // Clear static buffers
     RtlZeroMemory(g_ModuleBuffer, MODULE_BUFFER_SIZE);
-    DbgPrint("[elemetry] Global buffers cleared\n");
+    DbgPrint("[elemetry] Cleared module buffer\n");
 
-    // Final cleanup complete message
-    DbgPrint("[elemetry] Driver unloaded successfully.\n");
+    // Clear all major function pointers
+    for (ULONG i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
+        DriverObject->MajorFunction[i] = NULL;
+    }
+
+    DbgPrint("[elemetry] Driver unload complete\n");
 }

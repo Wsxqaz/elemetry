@@ -21,7 +21,7 @@ NTSTATUS InitializeCallbackTracking();
 VOID CleanupCallbackTracking();
 
 // --- Module Operations ---
-NTSTATUS GetHardcodedModules(
+NTSTATUS GetDynamicModules(
     _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
     _In_ ULONG OutputBufferLength,
     _Out_ PULONG BytesWrittenOrRequired
