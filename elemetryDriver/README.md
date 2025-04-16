@@ -6,9 +6,11 @@ This is a kernel-mode driver for the elemetry project, which is designed to trac
 
 ### Prerequisites
 
-- Visual Studio 2019 or later with the Windows Driver Kit (WDK) installed
+- Visual Studio 2019 or later with the Windows Driver Kit (WDK) and spectre mitigations components installed
 - Windows SDK 10.0.22621.0 or later
+- WDK
 - A test certificate for signing the driver
+- [See here](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
 
 ### Building
 

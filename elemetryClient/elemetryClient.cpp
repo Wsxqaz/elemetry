@@ -32,6 +32,7 @@ std::string wstring_to_string(const std::wstring& wstr) {
 // Constants
 const char* DRIVER_NAME = "\\\\.\\Elemetry"; // NT device path for our driver
 const char* DEFAULT_SYMBOL_PATH = "srv*C:\\Windows\\System32*https://msdl.microsoft.com/download/symbols";
+const char* SYSTEM32_PATH = "C:\\Windows\\System32\\";  // Path to system32 directory
 
 // Primary symbol names for callback tables
 const char* SYMBOL_LOAD_IMAGE_CALLBACKS = "PspLoadImageNotifyRoutine";
@@ -86,6 +87,40 @@ BOOL CALLBACK SymEnumCallback(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID Use
         return FALSE; // Stop enumeration, we found it
     }
     return TRUE; // Continue enumeration
+}
+
+// Function to check if a file exists
+bool FileExists(const std::string& filePath) {
+    return std::filesystem::exists(filePath);
+}
+
+// Function to get the path to ntoskrnl.exe
+std::string GetNtoskrnlPath() {
+    // First, check current directory
+    if (FileExists("ntoskrnl.exe")) {
+        return "ntoskrnl.exe";
+    }
+
+    // Then check System32
+    std::string system32Path = SYSTEM32_PATH;
+    std::string ntoskrnlSystem32 = system32Path + "ntoskrnl.exe";
+    if (FileExists(ntoskrnlSystem32)) {
+        return ntoskrnlSystem32;
+    }
+
+    // Try other possible kernel names in System32
+    std::string ntkrnlmpSystem32 = system32Path + "ntkrnlmp.exe";
+    if (FileExists(ntkrnlmpSystem32)) {
+        return ntkrnlmpSystem32;
+    }
+
+    std::string ntkrnlpaSystem32 = system32Path + "ntkrnlpa.exe";
+    if (FileExists(ntkrnlpaSystem32)) {
+        return ntkrnlpaSystem32;
+    }
+
+    // Not found
+    return "";
 }
 
 // Function to open a handle to the driver device
@@ -255,7 +290,7 @@ bool TestSymbolLookup(HANDLE deviceHandle) {
         std::wstring path = moduleInfos[i].Path;
         std::transform(path.begin(), path.end(), path.begin(), ::towlower);
 
-        if (path.find(L"ntoskrnl.exe") != std::wstring::npos || 
+        if (path.find(L"ntoskrnl.exe") != std::wstring::npos ||
             path.find(L"ntkrnlmp.exe") != std::wstring::npos ||
             path.find(L"ntkrnlpa.exe") != std::wstring::npos) {
             ntosAddr = moduleInfos[i].BaseAddress;
@@ -270,16 +305,25 @@ bool TestSymbolLookup(HANDLE deviceHandle) {
         return false;
     }
 
+    // Get path to ntoskrnl.exe
+    std::string ntoskrnlPath = GetNtoskrnlPath();
+    if (ntoskrnlPath.empty()) {
+        std::cerr << "Warning: Could not find ntoskrnl.exe in current directory or System32. Using default name." << std::endl;
+        ntoskrnlPath = "ntoskrnl.exe";
+    } else {
+        std::cout << "Using ntoskrnl.exe from: " << ntoskrnlPath << std::endl;
+    }
+
     // Load ntoskrnl symbols
-    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, "ntoskrnl.exe", NULL, (DWORD64)ntosAddr, 0, NULL, 0);
+    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, ntoskrnlPath.c_str(), NULL, (DWORD64)ntosAddr, 0, NULL, 0);
     if (baseAddr == 0 && GetLastError() != ERROR_SUCCESS) {
         DWORD error = GetLastError();
         std::cerr << "Failed to load symbols for ntoskrnl.exe. Error code: " << error << std::endl;
-        
+
         if (error == ERROR_MOD_NOT_FOUND) {
             std::cerr << "symsrv.dll load failure or symbols not found. Check symbol path." << std::endl;
         }
-        
+
         SymCleanup(hProcess);
         return false;
     }
@@ -381,6 +425,12 @@ bool LoadKernelModuleSymbols(HANDLE deviceHandle) {
 
     int modulesLoaded = 0;
 
+    // For ntoskrnl.exe, use our special function to find it in System32 if needed
+    std::string ntoskrnlPath = GetNtoskrnlPath();
+    if (!ntoskrnlPath.empty()) {
+        std::cout << "Using ntoskrnl.exe from: " << ntoskrnlPath << std::endl;
+    }
+
     for (DWORD i = 0; i < moduleCount; i++) {
         std::wstring path = moduleInfos[i].Path;
         std::wstring lowerPath = path;
@@ -406,17 +456,34 @@ bool LoadKernelModuleSymbols(HANDLE deviceHandle) {
             char ansiFileName[MAX_PATH] = {0};
             WideCharToMultiByte(CP_ACP, 0, fileName.c_str(), -1, ansiFileName, MAX_PATH, NULL, NULL);
 
-            std::cout << "Loading symbols for " << ansiFileName << " at 0x" 
+            std::cout << "Loading symbols for " << ansiFileName << " at 0x"
                      << std::hex << moduleInfos[i].BaseAddress << std::dec << "..." << std::endl;
 
+            // Use the full path for ntoskrnl if we found it earlier
+            const char* symbolFilePath = ansiFileName;
+            std::string fullPath;
+
+            if ((lowerPath.find(L"ntoskrnl.exe") != std::wstring::npos ||
+                 lowerPath.find(L"ntkrnlmp.exe") != std::wstring::npos ||
+                 lowerPath.find(L"ntkrnlpa.exe") != std::wstring::npos) &&
+                !ntoskrnlPath.empty()) {
+                symbolFilePath = ntoskrnlPath.c_str();
+            } else if (lowerPath.find(L"hal.dll") != std::wstring::npos) {
+                // Also check System32 for HAL.dll
+                fullPath = std::string(SYSTEM32_PATH) + "hal.dll";
+                if (FileExists(fullPath)) {
+                    symbolFilePath = fullPath.c_str();
+                }
+            }
+
             DWORD64 baseAddr = SymLoadModuleEx(
-                hProcess, 
-                NULL, 
-                ansiFileName, 
-                NULL, 
-                (DWORD64)moduleInfos[i].BaseAddress, 
-                moduleInfos[i].Size, 
-                NULL, 
+                hProcess,
+                NULL,
+                symbolFilePath,
+                NULL,
+                (DWORD64)moduleInfos[i].BaseAddress,
+                moduleInfos[i].Size,
+                NULL,
                 0
             );
 
@@ -437,7 +504,7 @@ bool LoadKernelModuleSymbols(HANDLE deviceHandle) {
     symbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
     symbolInfo.si.MaxNameLen = MAX_SYM_NAME;
 
-    if (SymFromName(hProcess, "ExAllocatePool2", &symbolInfo.si) || 
+    if (SymFromName(hProcess, "ExAllocatePool2", &symbolInfo.si) ||
         SymFromName(hProcess, "ExAllocatePoolWithTag", &symbolInfo.si)) {
         std::cout << "Symbol lookup test successful." << std::endl;
     } else {
@@ -454,17 +521,17 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
         std::cerr << "Invalid device handle." << std::endl;
         return false;
     }
-    
+
     // Initialize symbols
     HANDLE hProcess = GetCurrentProcess();
-    
+
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
-    
+
     if (!SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
         std::cerr << "Failed to initialize symbols. Error code: " << GetLastError() << std::endl;
         return false;
     }
-    
+
     // Get ntoskrnl.exe base address
     const DWORD bufferSize = sizeof(MODULE_INFO) * CLIENT_MAX_MODULES;
     std::vector<BYTE> buffer(bufferSize, 0);
@@ -479,22 +546,22 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
         &bytesReturned,
         NULL
     );
-    
+
     if (!success) {
         std::cerr << "Failed to get modules. Error code: " << GetLastError() << std::endl;
         SymCleanup(hProcess);
         return false;
     }
-    
+
     DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
     PVOID ntosAddr = NULL;
-    
+
     // Find ntoskrnl.exe
     for (DWORD i = 0; i < moduleCount; i++) {
         std::wstring path = moduleInfos[i].Path;
         std::transform(path.begin(), path.end(), path.begin(), ::towlower);
-        
-        if (path.find(L"ntoskrnl.exe") != std::wstring::npos || 
+
+        if (path.find(L"ntoskrnl.exe") != std::wstring::npos ||
             path.find(L"ntkrnlmp.exe") != std::wstring::npos ||
             path.find(L"ntkrnlpa.exe") != std::wstring::npos) {
             ntosAddr = moduleInfos[i].BaseAddress;
@@ -502,51 +569,60 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
             break;
         }
     }
-    
+
     if (!ntosAddr) {
         std::cerr << "Failed to find ntoskrnl.exe module" << std::endl;
         SymCleanup(hProcess);
         return false;
     }
-    
+
+    // Get path to ntoskrnl.exe
+    std::string ntoskrnlPath = GetNtoskrnlPath();
+    if (ntoskrnlPath.empty()) {
+        std::cerr << "Warning: Could not find ntoskrnl.exe in current directory or System32. Using default name." << std::endl;
+        ntoskrnlPath = "ntoskrnl.exe";
+    } else {
+        std::cout << "Using ntoskrnl.exe from: " << ntoskrnlPath << std::endl;
+    }
+
     // Load ntoskrnl symbols
-    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, "ntoskrnl.exe", NULL, (DWORD64)ntosAddr, 0, NULL, 0);
+    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, ntoskrnlPath.c_str(), NULL, (DWORD64)ntosAddr, 0, NULL, 0);
     if (baseAddr == 0 && GetLastError() != ERROR_SUCCESS) {
         std::cerr << "Failed to load symbols for ntoskrnl.exe. Error code: " << GetLastError() << std::endl;
         SymCleanup(hProcess);
         return false;
     }
-    
+
     // Look up the callback table symbol
     SYMBOL_INFO_PACKAGE symbolInfo = { 0 };
     symbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
     symbolInfo.si.MaxNameLen = MAX_SYM_NAME;
-    
+
     if (!SymFromName(hProcess, symbolName, &symbolInfo.si)) {
         std::cerr << "Failed to find symbol: " << symbolName << ". Error code: " << GetLastError() << std::endl;
         SymCleanup(hProcess);
         return false;
     }
-    
-    std::cout << "Found symbol " << symbolName << " at address: 0x" 
+
+    std::cout << "Found symbol " << symbolName << " at address: 0x"
               << std::hex << symbolInfo.si.Address << std::dec << std::endl;
-    
+
     // Prepare the request to enumerate callbacks
     PVOID callbackTable = (PVOID)symbolInfo.si.Address;
-    
+
     // Calculate required size for the request
     const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
     ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
-    
+
     // Allocate request buffer
     std::vector<BYTE> requestBuffer(requestSize, 0);
     PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-    
+
     // Initialize request
     request->Type = tableType;
     request->TableAddress = callbackTable;
     request->MaxCallbacks = maxCallbacks;
-    
+
     // Send request to driver
     bytesReturned = 0;
     success = DeviceIoControl(
@@ -557,17 +633,17 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
         &bytesReturned,
         nullptr
     );
-    
+
     if (!success) {
         std::cerr << "Failed to enumerate callbacks. Error code: " << GetLastError() << std::endl;
         SymCleanup(hProcess);
         return false;
     }
-    
+
     // Display results
-    std::cout << "Retrieved " << request->FoundCallbacks << " callbacks from " 
+    std::cout << "Retrieved " << request->FoundCallbacks << " callbacks from "
               << symbolName << " at address 0x" << std::hex << callbackTable << std::dec << std::endl;
-    
+
     // Determine callback type string for display
     std::string callbackTypeStr;
     switch (tableType) {
@@ -587,23 +663,23 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
             callbackTypeStr = "Unknown";
             break;
     }
-    
+
     std::cout << std::endl << "==== " << callbackTypeStr << " Callbacks ====" << std::endl << std::endl;
-    
+
     // Print callback information
     for (ULONG i = 0; i < request->FoundCallbacks; i++) {
         PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
-        
+
         std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
         std::cout << "    Name: " << info->CallbackName << std::endl;
         std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
-        
+
         // Try to get symbol information if possible
         char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
         PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
         pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
         pSymbol->MaxNameLen = MAX_SYM_NAME;
-        
+
         DWORD64 displacement = 0;
         if (SymFromAddr(hProcess, (DWORD64)info->Address, &displacement, pSymbol)) {
             std::cout << "    Symbol: " << pSymbol->Name;
@@ -612,10 +688,10 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
             }
             std::cout << std::endl;
         }
-        
+
         std::cout << std::endl;
     }
-    
+
     SymCleanup(hProcess);
     return true;
 }
@@ -623,7 +699,7 @@ bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE 
 // Function to try multiple registry callback symbol names
 bool TryEnumerateRegistryCallbacks(HANDLE deviceHandle) {
     std::cout << std::endl << "Enumerating registry callbacks..." << std::endl;
-    
+
     // Try each symbol name in the ALT_REGISTRY_CALLBACKS array
     for (int i = 0; i < ALT_REGISTRY_COUNT; i++) {
         std::cout << "Trying symbol: " << ALT_REGISTRY_CALLBACKS[i] << std::endl;
@@ -633,7 +709,7 @@ bool TryEnumerateRegistryCallbacks(HANDLE deviceHandle) {
         }
         std::cout << "Failed with symbol: " << ALT_REGISTRY_CALLBACKS[i] << std::endl;
     }
-    
+
     std::cout << "All registry callback enumeration methods failed." << std::endl;
     std::cout << "Please ensure symbols are properly configured and try again." << std::endl;
     return false;
@@ -648,13 +724,13 @@ bool GetDriverMinifilterCallbacks() {
 
     // Calculate buffer size for the request
     const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
-    const DWORD requestSize = FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks) + 
+    const DWORD requestSize = FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks) +
                               (maxCallbacks * sizeof(CALLBACK_INFO_SHARED));
-    
+
     // Allocate buffer
     std::vector<BYTE> buffer(requestSize, 0);
     PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(buffer.data());
-    
+
     // Set up request
     request->Type = CallbackTableFilesystem;
     request->TableAddress = nullptr; // Not needed for minifilters
@@ -708,14 +784,14 @@ bool GetDriverMinifilterCallbacks() {
     SYSTEMTIME st;
     GetLocalTime(&st);
     char timeStr[100];
-    sprintf_s(timeStr, sizeof(timeStr), "%04d%02d%02d_%02d%02d%02d", 
+    sprintf_s(timeStr, sizeof(timeStr), "%04d%02d%02d_%02d%02d%02d",
               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     fileBaseName += timeStr;
     fileBaseName += ".txt";
-    
+
     // Set the path to current directory
     std::string fileName = fileBaseName;
-    
+
     // Open output file
     std::ofstream outFile(fileName);
     if (outFile.is_open()) {
@@ -724,26 +800,26 @@ bool GetDriverMinifilterCallbacks() {
         outFile << "=============================================" << std::endl;
         outFile << "Total minifilter callbacks found: " << foundCallbacks << std::endl;
         outFile << "Date/Time: " << timeStr << std::endl << std::endl;
-        
+
         // Write callback details
         for (DWORD i = 0; i < foundCallbacks; i++) {
             WriteCallbackToFile(outFile, response->Callbacks[i]);
         }
-        
+
         // Add summary of module sources
         outFile << "\nCallback Source Summary:" << std::endl;
         outFile << "----------------------" << std::endl;
-        
+
         std::unordered_map<std::string, int> moduleCounts;
         for (DWORD i = 0; i < foundCallbacks; i++) {
             std::string moduleName = response->Callbacks[i].ModuleName;
             moduleCounts[moduleName]++;
         }
-        
+
         for (const auto& pair : moduleCounts) {
             outFile << pair.first << ": " << pair.second << " callbacks" << std::endl;
         }
-        
+
         std::cout << "Results successfully written to " << fileName << std::endl;
         outFile.close();
     }
@@ -801,32 +877,32 @@ int main() {
                 std::cout << std::endl << "Enumerating kernel modules..." << std::endl;
                 GetDriverModules();
                 break;
-                
+
             case 2:
                 std::cout << std::endl << "Enumerating load image callbacks..." << std::endl;
                 EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableLoadImage, SYMBOL_LOAD_IMAGE_CALLBACKS);
                 break;
-                
+
             case 3:
                 std::cout << std::endl << "Enumerating process creation callbacks..." << std::endl;
                 EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateProcess, SYMBOL_PROCESS_CALLBACKS);
                 break;
-                
+
             case 4:
                 std::cout << std::endl << "Enumerating thread creation callbacks..." << std::endl;
                 EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS);
                 break;
-                
+
             case 5:
                 // Use our new function that tries multiple symbol names
                 TryEnumerateRegistryCallbacks(deviceHandle);
                 break;
-                
+
             case 6:
                 std::cout << std::endl << "Enumerating minifilter callbacks..." << std::endl;
                 GetDriverMinifilterCallbacks();
                 break;
-                
+
             default:
                 std::cout << "Invalid option. Please try again." << std::endl;
                 break;
@@ -836,4 +912,4 @@ int main() {
     CloseHandle(deviceHandle);
     std::cout << "Operation completed successfully." << std::endl;
     return 0;
-} 
+}
