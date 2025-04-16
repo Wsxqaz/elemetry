@@ -136,26 +136,37 @@ void PrintModuleInfo(const MODULE_INFO& moduleInfo) {
 }
 
 // Function to get minifilter callback type as string
-std::string GetMinifilterCallbackTypeString(MINIFILTER_CALLBACK_TYPE type) {
+// Updated to accept CALLBACK_TYPE instead of MINIFILTER_CALLBACK_TYPE
+std::string GetMinifilterCallbackTypeString(CALLBACK_TYPE type) {
     switch (type) {
-    case MINIFILTER_CALLBACK_TYPE::MfUnknown: return "Unknown";
-    case MINIFILTER_CALLBACK_TYPE::MfCreatePre: return "PreCreate";
-    case MINIFILTER_CALLBACK_TYPE::MfCreatePost: return "PostCreate";
-    case MINIFILTER_CALLBACK_TYPE::MfClosePre: return "PreClose";
-    case MINIFILTER_CALLBACK_TYPE::MfClosePost: return "PostClose";
-    case MINIFILTER_CALLBACK_TYPE::MfReadPre: return "PreRead";
-    case MINIFILTER_CALLBACK_TYPE::MfReadPost: return "PostRead";
-    case MINIFILTER_CALLBACK_TYPE::MfWritePre: return "PreWrite";
-    case MINIFILTER_CALLBACK_TYPE::MfWritePost: return "PostWrite";
-    case MINIFILTER_CALLBACK_TYPE::MfQueryInformationPre: return "PreQueryInformation";
-    case MINIFILTER_CALLBACK_TYPE::MfQueryInformationPost: return "PostQueryInformation";
-    case MINIFILTER_CALLBACK_TYPE::MfSetInformationPre: return "PreSetInformation";
-    case MINIFILTER_CALLBACK_TYPE::MfSetInformationPost: return "PostSetInformation";
-    case MINIFILTER_CALLBACK_TYPE::MfDirectoryControlPre: return "PreDirectoryControl";
-    case MINIFILTER_CALLBACK_TYPE::MfDirectoryControlPost: return "PostDirectoryControl";
-    case MINIFILTER_CALLBACK_TYPE::MfFileSystemControlPre: return "PreFileSystemControl";
-    case MINIFILTER_CALLBACK_TYPE::MfFileSystemControlPost: return "PostFileSystemControl";
-    default: return "Other";
+        // Map CALLBACK_TYPE values to descriptive strings
+    case CALLBACK_TYPE::Unknown: return "Unknown";
+    case CALLBACK_TYPE::FsPreCreate: return "PreCreate";
+    case CALLBACK_TYPE::FsPostCreate: return "PostCreate";
+    case CALLBACK_TYPE::FsPreClose: return "PreClose";
+    case CALLBACK_TYPE::FsPostClose: return "PostClose";
+    case CALLBACK_TYPE::FsPreRead: return "PreRead";
+    case CALLBACK_TYPE::FsPostRead: return "PostRead";
+    case CALLBACK_TYPE::FsPreWrite: return "PreWrite";
+    case CALLBACK_TYPE::FsPostWrite: return "PostWrite";
+    case CALLBACK_TYPE::FsPreQueryInfo: return "PreQueryInformation";
+    case CALLBACK_TYPE::FsPostQueryInfo: return "PostQueryInformation";
+    case CALLBACK_TYPE::FsPreSetInfo: return "PreSetInformation";
+    case CALLBACK_TYPE::FsPostSetInfo: return "PostSetInformation";
+    case CALLBACK_TYPE::FsPreDirCtrl: return "PreDirectoryControl";
+    case CALLBACK_TYPE::FsPostDirCtrl: return "PostDirectoryControl";
+    case CALLBACK_TYPE::FsPreFsCtrl: return "PreFileSystemControl";
+    case CALLBACK_TYPE::FsPostFsCtrl: return "PostFileSystemControl";
+    // Add cases for other CALLBACK_TYPE members if needed
+    case CALLBACK_TYPE::PsLoadImage: return "PsLoadImage";
+    case CALLBACK_TYPE::PsProcessCreation: return "PsProcessCreation";
+    case CALLBACK_TYPE::PsThreadCreation: return "PsThreadCreation";
+    case CALLBACK_TYPE::CmRegistry: return "CmRegistry";
+    case CALLBACK_TYPE::ObProcessHandlePre: return "ObProcessHandlePre";
+    case CALLBACK_TYPE::ObProcessHandlePost: return "ObProcessHandlePost";
+    case CALLBACK_TYPE::ObThreadHandlePre: return "ObThreadHandlePre";
+    case CALLBACK_TYPE::ObThreadHandlePost: return "ObThreadHandlePost";
+    default: return "Other/Unknown"; // Default case for unmapped types
     }
 }
 
@@ -1937,13 +1948,24 @@ bool GetDriverMinifilterCallbacks() {
     request->MaxCallbacks = maxCallbacks;
     request->FoundCallbacks = 0;
 
+    // Set up request structure for input
+    CALLBACK_ENUM_REQUEST inputRequest = { 0 };
+    inputRequest.Type = CallbackTableFilesystem;
+    inputRequest.TableAddress = nullptr; // Not needed for minifilters
+    inputRequest.MaxCallbacks = maxCallbacks;
+
+    // Allocate buffer for output
+    DWORD outputBufferSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks * sizeof(CALLBACK_INFO_SHARED));
+    std::vector<BYTE> outputBuffer(outputBufferSize, 0);
+    PCALLBACK_ENUM_REQUEST response = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(outputBuffer.data());
+
     // Send IOCTL to get minifilter callbacks
     DWORD bytesReturned = 0;
     BOOL success = DeviceIoControl(
         deviceHandle,
         IOCTL_ENUM_CALLBACKS,
-        request, requestSize,
-        request, requestSize,
+        &inputRequest, sizeof(inputRequest), // Input buffer (fixed size)
+        response, outputBufferSize,          // Output buffer
         &bytesReturned,
         nullptr
     );
@@ -1954,10 +1976,18 @@ bool GetDriverMinifilterCallbacks() {
         return false;
     }
 
+    // Check how many callbacks were actually returned by the driver
+    if (bytesReturned < FIELD_OFFSET(CALLBACK_ENUM_REQUEST, Callbacks)) {
+        std::cerr << "DeviceIoControl returned insufficient data size: " << bytesReturned << std::endl;
+        CloseHandle(deviceHandle);
+        return false;
+    }
+    DWORD foundCallbacks = response->FoundCallbacks; // Get count from response struct
+
     // Print results
-    std::cout << "Retrieved " << request->FoundCallbacks << " minifilter callbacks:" << std::endl << std::endl;
-    for (DWORD i = 0; i < request->FoundCallbacks; i++) {
-        PrintCallbackInfo(request->Callbacks[i]);
+    std::cout << "Retrieved " << foundCallbacks << " minifilter callbacks:" << std::endl << std::endl;
+    for (DWORD i = 0; i < foundCallbacks; i++) {
+        PrintCallbackInfo(response->Callbacks[i]);
     }
 
     // Create a file name with timestamp for exporting
@@ -1979,12 +2009,12 @@ bool GetDriverMinifilterCallbacks() {
         // Write header
         outFile << "Elemetry Minifilter Callback Enumeration Results" << std::endl;
         outFile << "=============================================" << std::endl;
-        outFile << "Total minifilter callbacks found: " << request->FoundCallbacks << std::endl;
+        outFile << "Total minifilter callbacks found: " << foundCallbacks << std::endl;
         outFile << "Date/Time: " << timeStr << std::endl << std::endl;
         
         // Write callback details
-        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
-            WriteCallbackToFile(outFile, request->Callbacks[i]);
+        for (DWORD i = 0; i < foundCallbacks; i++) {
+            WriteCallbackToFile(outFile, response->Callbacks[i]);
         }
         
         // Add summary of module sources
@@ -1992,8 +2022,8 @@ bool GetDriverMinifilterCallbacks() {
         outFile << "----------------------" << std::endl;
         
         std::unordered_map<std::string, int> moduleCounts;
-        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
-            std::string moduleName = request->Callbacks[i].ModuleName;
+        for (DWORD i = 0; i < foundCallbacks; i++) {
+            std::string moduleName = response->Callbacks[i].ModuleName;
             moduleCounts[moduleName]++;
         }
         

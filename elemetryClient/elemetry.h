@@ -29,23 +29,23 @@ enum class CALLBACK_TYPE
     ObProcessHandlePost = 6,
     ObThreadHandlePre = 7,
     ObThreadHandlePost = 8,
-    FsPreCreate = 9,
-    FsPostCreate = 10,
-    FsPreClose = 11,
-    FsPostClose = 12,
-    FsPreRead = 13,
-    FsPostRead = 14,
-    FsPreWrite = 15,
-    FsPostWrite = 16,
-    FsPreQueryInfo = 17,
-    FsPostQueryInfo = 18,
-    FsPreSetInfo = 19,
-    FsPostSetInfo = 20,
-    FsPreDirCtrl = 21,
-    FsPostDirCtrl = 22,
-    FsPreFsCtrl = 23,
-    FsPostFsCtrl = 24
-    // Add more as needed
+    FsPreCreate = 9,          // Corresponds to MfCreatePre
+    FsPostCreate = 10,        // Corresponds to MfCreatePost
+    FsPreClose = 11,          // Corresponds to MfClosePre
+    FsPostClose = 12,         // Corresponds to MfClosePost
+    FsPreRead = 13,           // Corresponds to MfReadPre
+    FsPostRead = 14,          // Corresponds to MfReadPost
+    FsPreWrite = 15,          // Corresponds to MfWritePre
+    FsPostWrite = 16,         // Corresponds to MfWritePost
+    FsPreQueryInfo = 17,      // Corresponds to MfQueryInformationPre
+    FsPostQueryInfo = 18,     // Corresponds to MfQueryInformationPost
+    FsPreSetInfo = 19,        // Corresponds to MfSetInformationPre
+    FsPostSetInfo = 20,       // Corresponds to MfSetInformationPost
+    FsPreDirCtrl = 21,        // Corresponds to MfDirectoryControlPre
+    FsPostDirCtrl = 22,       // Corresponds to MfDirectoryControlPost
+    FsPreFsCtrl = 23,         // Corresponds to MfFileSystemControlPre
+    FsPostFsCtrl = 24         // Corresponds to MfFileSystemControlPost
+    // Add more as needed from MINIFILTER_CALLBACK_TYPE if driver populates them
 };
 
 // Define module information structure - must match driver's definition
@@ -136,11 +136,13 @@ typedef enum _MINIFILTER_CALLBACK_TYPE {
     MfPnpPost
 } MINIFILTER_CALLBACK_TYPE;
 
+// Update CALLBACK_INFO_SHARED to match driver definition
 typedef struct _CALLBACK_INFO_SHARED {
-    MINIFILTER_CALLBACK_TYPE Type;    // Type of callback
+    CALLBACK_TYPE Type;               // Use driver's CALLBACK_TYPE enum
     PVOID Address;                    // Address of callback
-    CHAR ModuleName[MAX_PATH];        // Name of module containing callback
-    CHAR CallbackName[MAX_PATH];      // Name of callback function
+    ULONG Context;                    // <<< Add missing Context field
+    CHAR CallbackName[MAX_CALLBACK_NAME]; // Use MAX_CALLBACK_NAME (256)
+    CHAR ModuleName[MAX_MODULE_NAME];   // Use MAX_MODULE_NAME (256)
 } CALLBACK_INFO_SHARED, *PCALLBACK_INFO_SHARED;
 
 // Define user-mode callback information structure
@@ -164,10 +166,11 @@ typedef struct _CALLBACK_ENTRY_UI
     BOOLEAN Suppressed;
 } CALLBACK_ENTRY_UI, *PCALLBACK_ENTRY_UI;
 
+// Update CALLBACK_ENUM_REQUEST to use the corrected CALLBACK_INFO_SHARED
 typedef struct _CALLBACK_ENUM_REQUEST {
     CALLBACK_TABLE_TYPE Type;         // Type of callback to enumerate
     PVOID TableAddress;               // Supplied by usermode from symbols
     ULONG MaxCallbacks;               // Max callbacks to retrieve
     ULONG FoundCallbacks;             // Number of callbacks found
-    CALLBACK_INFO_SHARED Callbacks[1]; // Variable-sized array
+    CALLBACK_INFO_SHARED Callbacks[1]; // Variable-sized array using CORRECT definition
 } CALLBACK_ENUM_REQUEST, *PCALLBACK_ENUM_REQUEST; 

@@ -39,10 +39,10 @@ CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
 ULONG g_CallbackCount = 0;
 
 // Define the number of hardcoded modules we are looking for
-#define HARDCODED_MODULE_COUNT 19 // Updated count to include WdFilter.sys
+#define HARDCODED_MODULE_COUNT 36 // Updated count after removing not found modules and duplicates
 
 // Internal storage for found module information
-static MODULE_INFO g_FoundModules[HARDCODED_MODULE_COUNT]; // Now this should work
+static MODULE_INFO g_FoundModules[HARDCODED_MODULE_COUNT];
 static BOOLEAN g_ModulesInitialized = FALSE;
 
 // Keep const for logic, but use define for array sizes
@@ -56,19 +56,36 @@ static const WCHAR* g_HardcodedModules[HARDCODED_MODULE_COUNT] = { // Use define
     L"tcpip.sys",
     L"dxgkrnl.sys",
     L"peauth.sys",
-    L"iorate.sys",
-    L"mmcss.sys",
     L"ahcache.sys",
     L"CI.dll",
     L"luafv.sys",
     L"npsvctrig.sys",
     L"Wof.sys",
-    L"fileinfo.sys",
     L"wcifs.sys",
-    L"fltmgr.sys",  // Changed bindflt.sys to fltmgr.sys since we need it for filesystem callbacks
-    L"WdFilter.sys", // Added Windows Defender minifilter driver
-    L"fltlib.sys",   // Added fltlib.sys for minifilter driver operations
-    L"bindflt.sys"   // Added bindflt.sys for minifilter driver operations
+    L"fltmgr.sys",
+    L"WdFilter.sys",
+    L"bindflt.sys",
+    L"acpiex.sys",
+    L"acpi.sys",
+    L"ataport.sys",
+    L"atapi.sys",
+    L"bootvid.dll",
+    L"clfs.sys",
+    L"disk.sys",
+    L"hal.dll",
+    L"kbdclass.sys",
+    L"mouclass.sys",
+    L"msrpc.sys",
+    L"ndis.sys",
+    L"ntfs.sys",
+    L"partmgr.sys",
+    L"pci.sys",
+    L"pshed.dll",
+    L"storport.sys",
+    L"win32k.sys",
+    L"win32kbase.sys",
+    L"win32kfull.sys",
+    L"dxgmms2.sys"
 };
 
 // Define static buffers
@@ -237,8 +254,23 @@ NTSTATUS GetHardcodedModules(
         // Iterate through the target module names
         for (ULONG targetIndex = 0; targetIndex < HARDCODED_MODULE_COUNT; ++targetIndex) {
             MODULE_INFO tempModuleInfo = {0}; // Temporary storage for FindModuleByName
+            BOOLEAN found = FALSE;
+
+            // Skip user-mode DLLs as they won't be in kernel space
+            if (wcscmp(g_HardcodedModules[targetIndex], L"ntdll.dll") == 0 ||
+                wcscmp(g_HardcodedModules[targetIndex], L"kernel32.dll") == 0 ||
+                wcscmp(g_HardcodedModules[targetIndex], L"kernelbase.dll") == 0 ||
+                wcscmp(g_HardcodedModules[targetIndex], L"advapi32.dll") == 0 ||
+                wcscmp(g_HardcodedModules[targetIndex], L"user32.dll") == 0 ||
+                wcscmp(g_HardcodedModules[targetIndex], L"gdi32.dll") == 0) {
+                DbgPrint("[elemetry] GetHardcodedModules: Skipping user-mode module %S\n", g_HardcodedModules[targetIndex]);
+                continue;
+            }
+
             // Compare the current module's name (lowercase) with the target name (lowercase)
-            if (FindModuleByName(ModuleInfo->Modules, ModuleInfo->Count, g_HardcodedModules[targetIndex], &tempModuleInfo)) {
+            found = FindModuleByName(ModuleInfo->Modules, ModuleInfo->Count, g_HardcodedModules[targetIndex], &tempModuleInfo);
+            
+            if (found) {
                 DbgPrint("[elemetry] GetHardcodedModules: Found module %S at %p\n",
                          g_HardcodedModules[targetIndex], tempModuleInfo.BaseAddress);
                 // Copy found info to internal storage AND output buffer if provided
@@ -256,11 +288,11 @@ NTSTATUS GetHardcodedModules(
                 wcscpy_s(g_FoundModules[targetIndex].Path, MAX_PATH, g_HardcodedModules[targetIndex]);
 
                 // Also copy placeholder to output buffer if provided
-                 if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
-                     RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[targetIndex], sizeof(MODULE_INFO));
-                 }
-                 // Increment foundCount even if not found, as we return placeholders
-                 foundCount++;
+                if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
+                    RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[targetIndex], sizeof(MODULE_INFO));
+                }
+                // Increment foundCount even if not found, as we return placeholders
+                foundCount++;
             }
         }
 
@@ -1421,6 +1453,44 @@ NTSTATUS EnumerateFilesystemCallbacks(
             continue;
         }
 
+        // Get the full module path from the filter information
+        // Correctly access the FilterNameBuffer within the struct
+        WCHAR* modulePath = FullFilterInfo->FilterNameBuffer; 
+        CHAR modulePathA[MAX_PATH] = { 0 };
+        
+        // Convert Unicode to ANSI properly, using FilterNameLength (in bytes)
+        ULONG bytesConverted = 0;
+        NTSTATUS convertStatus = RtlUnicodeToMultiByteN(
+            modulePathA,
+            MAX_PATH - 1, // Leave space for null terminator
+            &bytesConverted,
+            modulePath,
+            FullFilterInfo->FilterNameLength // Input length in bytes
+        );
+        
+        if (!NT_SUCCESS(convertStatus)) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to convert module path to ANSI: 0x%X\n", convertStatus);
+            RtlStringCbCopyA(modulePathA, MAX_PATH, "Unknown"); // Fallback
+            bytesConverted = (ULONG)strlen("Unknown"); // Update bytesConverted for fallback
+        } 
+        // Explicitly null-terminate the ANSI buffer after conversion
+        // bytesConverted holds the number of non-null bytes written by RtlUnicodeToMultiByteN
+        // Ensure we don't write past the buffer boundary defined by MAX_PATH
+        if (bytesConverted < MAX_PATH) { 
+            modulePathA[bytesConverted] = '\0';
+        } else {
+             modulePathA[MAX_PATH - 1] = '\0'; // Ensure null termination even if conversion filled the buffer
+        }
+
+        // Extract just the filename from the path
+        CHAR* LastBackslash = strrchr(modulePathA, '\\');
+        PCSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : modulePathA;
+
+        // --- Debug Print Raw ANSI Buffer --- 
+        DbgPrint("[elemetry] Debug: Converted Module Raw: '%hs' (len=%lu), Filename: '%hs'\n", 
+                 modulePathA, bytesConverted, FileNameOnly);
+        // --- End Debug --- 
+
         // Get filter instances
         ULONG NumberInstancesReturned = 0;
         Status = FltEnumerateInstances(nullptr, FilterList[i], nullptr, 0, &NumberInstancesReturned);
@@ -1430,15 +1500,34 @@ NTSTATUS EnumerateFilesystemCallbacks(
             continue;
         }
 
-        BufferSize = sizeof(PFLT_INSTANCE) * NumberInstancesReturned;
-        PFLT_INSTANCE* InstanceList = (PFLT_INSTANCE*)ExAllocatePool2(POOL_FLAG_NON_PAGED, BufferSize, DRIVER_TAG);
-        if (!InstanceList) {
-            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to allocate instance list\n");
+        // Calculate required size as ULONG, checking for overflow
+        ULONG InstanceListSizeUL = 0;
+        // Perform calculation using SIZE_T first to detect potential overflow
+        SIZE_T InstanceListSizeSZ = (SIZE_T)sizeof(PFLT_INSTANCE) * NumberInstancesReturned;
+
+        // Check if the SIZE_T result fits within a ULONG
+        if (InstanceListSizeSZ > MAXULONG) { 
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Instance list size exceeds ULONG_MAX (%llu bytes)\n", InstanceListSizeSZ);
             ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            // Treat overflow as insufficient resources or a specific error
+            Status = STATUS_INSUFFICIENT_RESOURCES; 
+            continue; // Skip this filter if size is too large
+        } else {
+            // Safe to cast to ULONG now
+            InstanceListSizeUL = (ULONG)InstanceListSizeSZ; 
+        }
+
+        // Allocate memory using the original SIZE_T calculation (or InstanceListSizeUL, promotion is safe)
+        PFLT_INSTANCE* InstanceList = (PFLT_INSTANCE*)ExAllocatePool2(POOL_FLAG_NON_PAGED, InstanceListSizeSZ, DRIVER_TAG);
+        if (!InstanceList) {
+            DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to allocate instance list (%lu bytes)\n", InstanceListSizeUL);
+            ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
+            // Allocation failed, insufficient resources is implied, just continue
             continue;
         }
 
-        Status = FltEnumerateInstances(nullptr, FilterList[i], InstanceList, (ULONG)BufferSize, &NumberInstancesReturned);
+        // Get the actual instances using the validated ULONG size
+        Status = FltEnumerateInstances(nullptr, FilterList[i], InstanceList, InstanceListSizeUL, &NumberInstancesReturned);
         if (!NT_SUCCESS(Status)) {
             DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to enumerate instances: 0x%X\n", Status);
             ExFreePoolWithTag(InstanceList, DRIVER_TAG);
@@ -1465,20 +1554,52 @@ NTSTATUS EnumerateFilesystemCallbacks(
                 if (PreCallback) {
                     CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 11);
                     CallbackArray[count].Address = PreCallback;
-                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_PATH, 
-                                   (const char*)FullFilterInfo->FilterNameBuffer);
-                    RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
-                                     "PreOperation_%u", j - 0x16);
+                    
+                    // --- Start Debug --- 
+                    DbgPrint("[elemetry] Debug: PreCallback Module Raw: '%hs', Bytes Converted: %lu\n", 
+                             modulePathA, bytesConverted);
+                    CHAR tempCallbackName[MAX_PATH] = {0};
+                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH, 
+                                                               "PreOperation_%u", j - 0x16);
+                    DbgPrint("[elemetry] Debug: PreCallback Name Format Status: 0x%X, Name: '%hs'\n", 
+                             formatStatus, tempCallbackName);
+                    // --- End Debug --- 
+                    
+                    // Copy the module name properly
+                    RtlZeroMemory(CallbackArray[count].ModuleName, MAX_MODULE_NAME);
+                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_MODULE_NAME, FileNameOnly);
+                    
+                    // Format the callback name
+                    RtlZeroMemory(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME);
+                    RtlStringCbCopyA(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, tempCallbackName); 
+                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                    //                  "PreOperation_%u", j - 0x16);
                     count++;
                 }
 
                 if (PostCallback) {
                     CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 12);
                     CallbackArray[count].Address = PostCallback;
-                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_PATH, 
-                                   (const char*)FullFilterInfo->FilterNameBuffer);
-                    RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
-                                     "PostOperation_%u", j - 0x16);
+                    
+                    // --- Start Debug --- 
+                    DbgPrint("[elemetry] Debug: PostCallback Module Raw: '%hs', Bytes Converted: %lu\n", 
+                             modulePathA, bytesConverted);
+                    CHAR tempCallbackName[MAX_PATH] = {0};
+                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH, 
+                                                               "PostOperation_%u", j - 0x16);
+                    DbgPrint("[elemetry] Debug: PostCallback Name Format Status: 0x%X, Name: '%hs'\n", 
+                             formatStatus, tempCallbackName);
+                     // --- End Debug --- 
+                    
+                    // Copy the module name properly
+                    RtlZeroMemory(CallbackArray[count].ModuleName, MAX_MODULE_NAME);
+                    RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_MODULE_NAME, FileNameOnly);
+                    
+                    // Format the callback name
+                    RtlZeroMemory(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME);
+                    RtlStringCbCopyA(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, tempCallbackName);
+                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                    //                  "PostOperation_%u", j - 0x16);
                     count++;
                 }
             }
@@ -1531,6 +1652,62 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
                 
                 break;
             }
+        }
+    }
+
+    // If module not found, try to determine if it's in a known memory region
+    if (CallbackInfo->ModuleName[0] == '\0') {
+        // Check if it's in the session space (0xFFFFCA00...)
+        if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFCA0000000000) {
+            RtlCopyMemory(CallbackInfo->ModuleName, "SessionSpace", sizeof("SessionSpace"));
+            sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                    "Callback@0x%p", CallbackInfo->Address);
+        }
+        // Check if it's in the system space (0xFFFFF800...)
+        else if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFF80000000000) {
+            // Try to find the closest module in system space
+            ULONG_PTR closestModuleBase = 0;
+            ULONG_PTR smallestDistance = ~0ULL;
+            WCHAR closestModuleName[MAX_PATH] = {0};
+
+            for (ULONG m = 0; m < HARDCODED_MODULE_COUNT; m++) {
+                if (g_FoundModules[m].BaseAddress != NULL) {
+                    ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
+                    if ((moduleBase & 0xFFFF000000000000) == 0xFFFFF80000000000) {
+                        ULONG_PTR distance = (callbackAddress > moduleBase) ? 
+                            (callbackAddress - moduleBase) : (moduleBase - callbackAddress);
+                        if (distance < smallestDistance) {
+                            smallestDistance = distance;
+                            closestModuleBase = moduleBase;
+                            wcscpy_s(closestModuleName, MAX_PATH, g_FoundModules[m].Path);
+                        }
+                    }
+                }
+            }
+
+            if (closestModuleBase != 0 && smallestDistance < 0x1000000) { // Within 16MB
+                // Extract just the filename from path
+                WCHAR* LastBackslash = wcsrchr(closestModuleName, L'\\');
+                PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : closestModuleName;
+                
+                // Convert wide char to char (ASCII only)
+                for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
+                    CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
+                }
+                
+                sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                        "Callback@0x%p (near %S)", CallbackInfo->Address, FileNameOnly);
+            } else {
+                RtlCopyMemory(CallbackInfo->ModuleName, "SystemSpace", sizeof("SystemSpace"));
+                sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                        "Callback@0x%p", CallbackInfo->Address);
+            }
+        }
+        // Default to Unknown if we can't determine the region
+        else {
+            RtlCopyMemory(CallbackInfo->ModuleName, "Unknown", sizeof("Unknown"));
+            sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
+                    "Callback@0x%p", CallbackInfo->Address);
         }
     }
 }
