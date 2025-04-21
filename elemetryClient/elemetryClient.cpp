@@ -1561,8 +1561,9 @@ VOID PaintWindow(HWND hWnd)
     tie.pszText = (LPWSTR)L"About";
     TabCtrl_InsertItem(wh.TabControl, 6, &tie);
 
-    // Create tab pages
-    // Modules page
+    // ====================================================
+    // === MODULES PAGE ===
+    // ====================================================
     wh.ModulesPage = CreateWindowEx(
         NULL,                                   // no extended styles
         L"STATIC",                              // name of static control class
@@ -1581,8 +1582,8 @@ VOID PaintWindow(HWND hWnd)
         L"Refresh",                             // button text
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
         10, 40, 100, 25,                        // size and position
-        hWnd,                                   // handle to parent window
-        (HMENU)IDM_REFRESH_MODULES,             // child window identifier - using our command ID
+        wh.ModulesPage,                         // handle to parent window (changed to ModulesPage)
+        (HMENU)IDM_REFRESH_MODULES,             // child window identifier
         g_hInst,                                // handle to application instance
         NULL);                                  // no window creation data
 
@@ -1593,7 +1594,7 @@ VOID PaintWindow(HWND hWnd)
         L"Modules found: 0",                    // initial text
         WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
         120, 45, 200, 20,                       // size and position
-        hWnd,                                   // handle to parent window
+        wh.ModulesPage,                         // handle to parent window (changed to ModulesPage)
         (HMENU)0,                               // child window identifier
         g_hInst,                                // handle to application instance
         NULL);                                  // no window creation data
@@ -1605,7 +1606,7 @@ VOID PaintWindow(HWND hWnd)
         NULL,                                   // no text
         WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
         10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
-        hWnd,                                   // handle to parent window
+        wh.ModulesPage,                         // handle to parent window (changed to ModulesPage)
         (HMENU)0,                               // child window identifier
         g_hInst,                                // handle to application instance
         NULL);                                  // no window creation data
@@ -1634,9 +1635,366 @@ VOID PaintWindow(HWND hWnd)
     lvc.cx = 100;
     ListView_InsertColumn(wh.ModulesListView, 4, &lvc);
 
-    // Create similar pages and controls for each callback type...
-    // (Process Callbacks, Thread Callbacks, Registry Callbacks, etc.)
-    // The code is similar to the Modules page but with different labels and columns
+    // ====================================================
+    // === PROCESS CALLBACKS PAGE ===
+    // ====================================================
+    wh.ProcessCallbacksPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Process Callbacks refresh button
+    wh.ProcessCallbacksRefreshButton = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"BUTTON",                              // name of button control class
+        L"Refresh",                             // button text
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
+        10, 40, 100, 25,                        // size and position
+        wh.ProcessCallbacksPage,                // handle to parent window
+        (HMENU)IDM_REFRESH_PROCESS_CALLBACKS,   // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Process Callbacks count label
+    wh.ProcessCallbacksCountLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Callbacks found: 0",                  // initial text
+        WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
+        120, 45, 200, 20,                       // size and position
+        wh.ProcessCallbacksPage,                // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Process Callbacks list view
+    wh.ProcessCallbacksListView = CreateWindowEx(
+        NULL,                                   // no extended styles
+        WC_LISTVIEW,                            // name of list view class
+        NULL,                                   // no text
+        WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
+        10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
+        wh.ProcessCallbacksPage,                // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Add columns to process callbacks list view
+    lvc.pszText = (LPWSTR)L"Name";
+    lvc.cx = 300;
+    ListView_InsertColumn(wh.ProcessCallbacksListView, 0, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Type";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ProcessCallbacksListView, 1, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Address";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ProcessCallbacksListView, 2, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Module";
+    lvc.cx = 200;
+    ListView_InsertColumn(wh.ProcessCallbacksListView, 3, &lvc);
+
+    // ====================================================
+    // === THREAD CALLBACKS PAGE ===
+    // ====================================================
+    wh.ThreadCallbacksPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Thread Callbacks refresh button
+    wh.ThreadCallbacksRefreshButton = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"BUTTON",                              // name of button control class
+        L"Refresh",                             // button text
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
+        10, 40, 100, 25,                        // size and position
+        wh.ThreadCallbacksPage,                 // handle to parent window
+        (HMENU)IDM_REFRESH_THREAD_CALLBACKS,    // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Thread Callbacks count label
+    wh.ThreadCallbacksCountLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Callbacks found: 0",                  // initial text
+        WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
+        120, 45, 200, 20,                       // size and position
+        wh.ThreadCallbacksPage,                 // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Thread Callbacks list view
+    wh.ThreadCallbacksListView = CreateWindowEx(
+        NULL,                                   // no extended styles
+        WC_LISTVIEW,                            // name of list view class
+        NULL,                                   // no text
+        WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
+        10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
+        wh.ThreadCallbacksPage,                 // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Add columns to thread callbacks list view
+    lvc.pszText = (LPWSTR)L"Name";
+    lvc.cx = 300;
+    ListView_InsertColumn(wh.ThreadCallbacksListView, 0, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Type";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ThreadCallbacksListView, 1, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Address";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ThreadCallbacksListView, 2, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Module";
+    lvc.cx = 200;
+    ListView_InsertColumn(wh.ThreadCallbacksListView, 3, &lvc);
+
+    // ====================================================
+    // === REGISTRY CALLBACKS PAGE ===
+    // ====================================================
+    wh.RegistryCallbacksPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Registry Callbacks refresh button
+    wh.RegistryCallbacksRefreshButton = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"BUTTON",                              // name of button control class
+        L"Refresh",                             // button text
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
+        10, 40, 100, 25,                        // size and position
+        wh.RegistryCallbacksPage,               // handle to parent window
+        (HMENU)IDM_REFRESH_REGISTRY_CALLBACKS,  // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Registry Callbacks count label
+    wh.RegistryCallbacksCountLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Callbacks found: 0",                  // initial text
+        WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
+        120, 45, 200, 20,                       // size and position
+        wh.RegistryCallbacksPage,               // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Registry Callbacks list view
+    wh.RegistryCallbacksListView = CreateWindowEx(
+        NULL,                                   // no extended styles
+        WC_LISTVIEW,                            // name of list view class
+        NULL,                                   // no text
+        WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
+        10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
+        wh.RegistryCallbacksPage,               // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Add columns to registry callbacks list view
+    lvc.pszText = (LPWSTR)L"Name";
+    lvc.cx = 300;
+    ListView_InsertColumn(wh.RegistryCallbacksListView, 0, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Type";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.RegistryCallbacksListView, 1, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Address";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.RegistryCallbacksListView, 2, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Module";
+    lvc.cx = 200;
+    ListView_InsertColumn(wh.RegistryCallbacksListView, 3, &lvc);
+
+    // ====================================================
+    // === FILESYSTEM CALLBACKS PAGE ===
+    // ====================================================
+    wh.FilesystemCallbacksPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Filesystem Callbacks refresh button
+    wh.FilesystemCallbacksRefreshButton = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"BUTTON",                              // name of button control class
+        L"Refresh",                             // button text
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
+        10, 40, 100, 25,                        // size and position
+        wh.FilesystemCallbacksPage,             // handle to parent window
+        (HMENU)IDM_REFRESH_FILESYSTEM_CALLBACKS,// child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Filesystem Callbacks count label
+    wh.FilesystemCallbacksCountLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Callbacks found: 0",                  // initial text
+        WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
+        120, 45, 200, 20,                       // size and position
+        wh.FilesystemCallbacksPage,             // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Filesystem Callbacks list view
+    wh.FilesystemCallbacksListView = CreateWindowEx(
+        NULL,                                   // no extended styles
+        WC_LISTVIEW,                            // name of list view class
+        NULL,                                   // no text
+        WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
+        10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
+        wh.FilesystemCallbacksPage,             // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Add columns to filesystem callbacks list view
+    lvc.pszText = (LPWSTR)L"Name";
+    lvc.cx = 300;
+    ListView_InsertColumn(wh.FilesystemCallbacksListView, 0, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Type";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.FilesystemCallbacksListView, 1, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Address";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.FilesystemCallbacksListView, 2, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Module";
+    lvc.cx = 200;
+    ListView_InsertColumn(wh.FilesystemCallbacksListView, 3, &lvc);
+
+    // ====================================================
+    // === OBJECT CALLBACKS PAGE ===
+    // ====================================================
+    wh.ObjectCallbacksPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Object Callbacks refresh button
+    wh.ObjectCallbacksRefreshButton = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"BUTTON",                              // name of button control class
+        L"Refresh",                             // button text
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,  // creates a visible child window
+        10, 40, 100, 25,                        // size and position
+        wh.ObjectCallbacksPage,                 // handle to parent window
+        (HMENU)IDM_REFRESH_OBJECT_CALLBACKS,    // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Object Callbacks count label
+    wh.ObjectCallbacksCountLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Callbacks found: 0",                  // initial text
+        WS_CHILD | WS_VISIBLE | SS_LEFT,        // creates a visible child window
+        120, 45, 200, 20,                       // size and position
+        wh.ObjectCallbacksPage,                 // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Object Callbacks list view
+    wh.ObjectCallbacksListView = CreateWindowEx(
+        NULL,                                   // no extended styles
+        WC_LISTVIEW,                            // name of list view class
+        NULL,                                   // no text
+        WS_CHILD | WS_VISIBLE | LVS_REPORT,     // creates a visible child window
+        10, 70, rcMain.right - 20, rcMain.bottom - 100,// size and position
+        wh.ObjectCallbacksPage,                 // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // Add columns to object callbacks list view
+    lvc.pszText = (LPWSTR)L"Name";
+    lvc.cx = 300;
+    ListView_InsertColumn(wh.ObjectCallbacksListView, 0, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Type";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ObjectCallbacksListView, 1, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Address";
+    lvc.cx = 150;
+    ListView_InsertColumn(wh.ObjectCallbacksListView, 2, &lvc);
+
+    lvc.pszText = (LPWSTR)L"Module";
+    lvc.cx = 200;
+    ListView_InsertColumn(wh.ObjectCallbacksListView, 3, &lvc);
+
+    // ====================================================
+    // === ABOUT PAGE ===
+    // ====================================================
+    wh.AboutPage = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        NULL,                                   // no text
+        WS_CHILD,                               // creates a hidden child window
+        0, 30, rcMain.right, rcMain.bottom - 30,// size and position
+        hWnd,                                   // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
+
+    // About label
+    wh.AboutLabel = CreateWindowEx(
+        NULL,                                   // no extended styles
+        L"STATIC",                              // name of static control class
+        L"Elemetry Client v1.0.0\r\n\r\nA tool for enumerating and analyzing Windows kernel callbacks.",
+        WS_CHILD | WS_VISIBLE | SS_CENTER,      // creates a visible child window
+        10, 40, rcMain.right - 20, 100,         // size and position
+        wh.AboutPage,                           // handle to parent window
+        (HMENU)0,                               // child window identifier
+        g_hInst,                                // handle to application instance
+        NULL);                                  // no window creation data
 
     // End painting
     EndPaint(hWnd, &ps);
@@ -1646,7 +2004,30 @@ VOID PaintWindow(HWND hWnd)
     AppendMenuW(wh.ModulesContextMenu, MF_STRING, IDM_REFRESH_MODULES, L"Refresh");
     AppendMenuW(wh.ModulesContextMenu, MF_STRING, IDM_COPY_MODULE, L"Copy");
 
-    // Create similar context menus for each callback type...
+    // Process Callbacks context menu
+    wh.ProcessCallbacksContextMenu = CreatePopupMenu();
+    AppendMenuW(wh.ProcessCallbacksContextMenu, MF_STRING, IDM_REFRESH_PROCESS_CALLBACKS, L"Refresh");
+    AppendMenuW(wh.ProcessCallbacksContextMenu, MF_STRING, IDM_COPY_CALLBACK, L"Copy");
+
+    // Thread Callbacks context menu
+    wh.ThreadCallbacksContextMenu = CreatePopupMenu();
+    AppendMenuW(wh.ThreadCallbacksContextMenu, MF_STRING, IDM_REFRESH_THREAD_CALLBACKS, L"Refresh");
+    AppendMenuW(wh.ThreadCallbacksContextMenu, MF_STRING, IDM_COPY_CALLBACK, L"Copy");
+
+    // Registry Callbacks context menu
+    wh.RegistryCallbacksContextMenu = CreatePopupMenu();
+    AppendMenuW(wh.RegistryCallbacksContextMenu, MF_STRING, IDM_REFRESH_REGISTRY_CALLBACKS, L"Refresh");
+    AppendMenuW(wh.RegistryCallbacksContextMenu, MF_STRING, IDM_COPY_CALLBACK, L"Copy");
+
+    // Filesystem Callbacks context menu
+    wh.FilesystemCallbacksContextMenu = CreatePopupMenu();
+    AppendMenuW(wh.FilesystemCallbacksContextMenu, MF_STRING, IDM_REFRESH_FILESYSTEM_CALLBACKS, L"Refresh");
+    AppendMenuW(wh.FilesystemCallbacksContextMenu, MF_STRING, IDM_COPY_CALLBACK, L"Copy");
+
+    // Object Callbacks context menu
+    wh.ObjectCallbacksContextMenu = CreatePopupMenu();
+    AppendMenuW(wh.ObjectCallbacksContextMenu, MF_STRING, IDM_REFRESH_OBJECT_CALLBACKS, L"Refresh");
+    AppendMenuW(wh.ObjectCallbacksContextMenu, MF_STRING, IDM_COPY_CALLBACK, L"Copy");
 }
 
 VOID ResizeWindow(HWND hWnd)
@@ -1762,9 +2143,13 @@ void PopulateCallbackListView(HWND hListView, PCALLBACK_INFO_SHARED pCallbacks, 
         lvItem.mask = LVIF_TEXT;
         lvItem.iItem = i;
 
-        // Name column
+        // Name column - convert from ANSI/UTF-8 to Unicode
+        wchar_t wCallbackName[MAX_CALLBACK_NAME] = {0};
+        MultiByteToWideChar(CP_UTF8, 0, pCallbacks[i].CallbackName, -1, 
+                           wCallbackName, MAX_CALLBACK_NAME);
+                           
         lvItem.iSubItem = 0;
-        lvItem.pszText = (LPWSTR)pCallbacks[i].CallbackName;
+        lvItem.pszText = wCallbackName;
         ListView_InsertItem(hListView, &lvItem);
 
         // Type column
@@ -1861,9 +2246,13 @@ void PopulateCallbackListView(HWND hListView, PCALLBACK_INFO_SHARED pCallbacks, 
         lvItem.pszText = addrStr;
         ListView_SetItem(hListView, &lvItem);
 
-        // Module column
+        // Module column - convert from ANSI/UTF-8 to Unicode
+        wchar_t wModuleName[MAX_PATH] = {0};
+        MultiByteToWideChar(CP_UTF8, 0, pCallbacks[i].ModuleName, -1, 
+                           wModuleName, MAX_PATH);
+                           
         lvItem.iSubItem = 3;
-        lvItem.pszText = (LPWSTR)pCallbacks[i].ModuleName;
+        lvItem.pszText = wModuleName;
         ListView_SetItem(hListView, &lvItem);
     }
 }
@@ -2018,78 +2407,40 @@ void RefreshThreadCallbacks()
     }
     LogInfo(L"Successfully opened driver handle");
 
-    // Keep the calculation simple - just use a fixed size for the entire buffer
-    // that's big enough to hold the header plus all possible callbacks
-    const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
-    const DWORD headerSize = sizeof(CALLBACK_ENUM_REQUEST) - sizeof(CALLBACK_INFO_SHARED); // Header without the first array element
-    const DWORD callbacksSize = maxCallbacks * sizeof(CALLBACK_INFO_SHARED);
-    const DWORD requestSize = headerSize + callbacksSize;
-    
-    LogDebug(L"Allocating buffer. Size: %d bytes (header: %d + callbacks: %d), Max callbacks: %d", 
-             requestSize, headerSize, callbacksSize, maxCallbacks);
-
-    // Allocate buffer for the request, zeroing it out
-    std::vector<BYTE> requestBuffer(requestSize, 0);
-    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-
-    // Initialize request
-    request->Type = CallbackTableCreateThread;
-    request->TableAddress = nullptr; // Driver will find the table
-    request->MaxCallbacks = maxCallbacks;
-    request->FoundCallbacks = 0;
-
-    // Send request to driver
-    DWORD bytesReturned = 0;
-    LogInfo(L"Sending IOCTL_ENUM_CALLBACKS to driver...");
-    BOOL success = DeviceIoControl(
-        deviceHandle,
-        IOCTL_ENUM_CALLBACKS,
-        request, requestSize,
-        request, requestSize,
-        &bytesReturned,
-        nullptr
-    );
-
-    if (!success) {
-        DWORD error = GetLastError();
-        LogError(L"DeviceIoControl failed. Error code: %d", error);
-        LogError(L"BytesReturned: %d, Expected: %d", bytesReturned, requestSize);
+    // For thread callbacks, we need to use the EnumerateCallbacksWithSymbolTable function
+    // since we need a valid table address for the PspCreateThreadNotifyRoutine table
+    LogInfo(L"Using EnumerateCallbacksWithSymbolTable with SYMBOL_THREAD_CALLBACKS");
+    if (EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS)) {
+        LogInfo(L"Successfully retrieved thread callbacks");
+        
+        // Count the number of thread callbacks for display
+        DWORD callbackCount = static_cast<DWORD>(wd.ThreadCallbacks.size());
+        
+        // Update count label
+        wchar_t countLabel[32];
+        StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", callbackCount);
+        SetWindowText(wh.ThreadCallbacksCountLabel, countLabel);
+        LogDebug(L"Updated count label: %s", countLabel);
+        
+        // Log each callback found
+        for (DWORD i = 0; i < callbackCount; i++) {
+            LogDebug(L"Callback[%d]: Name=%hs, Type=%d, Address=0x%p, Module=%hs",
+                    i,
+                    wd.ThreadCallbacks[i].CallbackName,
+                    wd.ThreadCallbacks[i].Type,
+                    wd.ThreadCallbacks[i].Address,
+                    wd.ThreadCallbacks[i].ModuleName);
+        }
+        
+        // Update list view with the callbacks from the window data
+        PopulateCallbackListView(wh.ThreadCallbacksListView, wd.ThreadCallbacks.data(), callbackCount);
+    } else {
+        LogError(L"Failed to enumerate thread callbacks");
         MessageBox(wh.Main, L"Failed to get thread callbacks", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
     }
-    LogInfo(L"Successfully received callback data. BytesReturned: %d", bytesReturned);
-
-    // Validate the response
-    if (bytesReturned < sizeof(CALLBACK_ENUM_REQUEST)) {
-        LogError(L"Insufficient data received. BytesReturned: %d, Minimum expected: %d", 
-                bytesReturned, sizeof(CALLBACK_ENUM_REQUEST));
-        MessageBox(wh.Main, L"Insufficient data received from driver", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    LogInfo(L"Found %d thread callbacks", request->FoundCallbacks);
-    
-    // Update count label
-    wchar_t countLabel[32];
-    StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", request->FoundCallbacks);
-    SetWindowText(wh.ThreadCallbacksCountLabel, countLabel);
-
-    // Validate callback data before populating
-    if (request->FoundCallbacks > maxCallbacks) {
-        LogError(L"Driver returned too many callbacks: %d (max: %d)", 
-                request->FoundCallbacks, maxCallbacks);
-        MessageBox(wh.Main, L"Invalid callback count received", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    // Update list view
-    PopulateCallbackListView(wh.ThreadCallbacksListView, request->Callbacks, request->FoundCallbacks);
 
     CloseHandle(deviceHandle);
-    LogInfo(L"Thread callback refresh completed successfully");
+    LogInfo(L"Thread callback refresh completed");
 }
 
 void RefreshRegistryCallbacks()
@@ -2105,78 +2456,48 @@ void RefreshRegistryCallbacks()
     }
     LogInfo(L"Successfully opened driver handle");
 
-    // Keep the calculation simple - just use a fixed size for the entire buffer
-    // that's big enough to hold the header plus all possible callbacks
-    const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
-    const DWORD headerSize = sizeof(CALLBACK_ENUM_REQUEST) - sizeof(CALLBACK_INFO_SHARED); // Header without the first array element
-    const DWORD callbacksSize = maxCallbacks * sizeof(CALLBACK_INFO_SHARED);
-    const DWORD requestSize = headerSize + callbacksSize;
+    // For registry callbacks, we need to use the EnumerateCallbacksWithSymbolTable function
+    // Registry callbacks might need to try multiple symbol names
+    LogInfo(L"Using EnumerateCallbacksWithSymbolTable with SYMBOL_REGISTRY_CALLBACKS");
     
-    LogDebug(L"Allocating buffer. Size: %d bytes (header: %d + callbacks: %d), Max callbacks: %d", 
-             requestSize, headerSize, callbacksSize, maxCallbacks);
-
-    // Allocate buffer for the request, zeroing it out
-    std::vector<BYTE> requestBuffer(requestSize, 0);
-    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-
-    // Initialize request
-    request->Type = CallbackTableRegistry;
-    request->TableAddress = nullptr; // Driver will find the table
-    request->MaxCallbacks = maxCallbacks;
-    request->FoundCallbacks = 0;
-
-    // Send request to driver
-    DWORD bytesReturned = 0;
-    LogInfo(L"Sending IOCTL_ENUM_CALLBACKS to driver...");
-    BOOL success = DeviceIoControl(
-        deviceHandle,
-        IOCTL_ENUM_CALLBACKS,
-        request, requestSize,
-        request, requestSize,
-        &bytesReturned,
-        nullptr
-    );
-
-    if (!success) {
-        DWORD error = GetLastError();
-        LogError(L"DeviceIoControl failed. Error code: %d", error);
-        LogError(L"BytesReturned: %d, Expected: %d", bytesReturned, requestSize);
+    bool success = false;
+    // Try multiple registry callback symbol names if needed
+    for (int i = 0; i < ALT_REGISTRY_COUNT && !success; i++) {
+        LogInfo(L"Trying registry callback symbol: %hs", ALT_REGISTRY_CALLBACKS[i]);
+        success = EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableRegistry, ALT_REGISTRY_CALLBACKS[i]);
+    }
+    
+    if (success) {
+        LogInfo(L"Successfully retrieved registry callbacks");
+        
+        // Count the number of registry callbacks for display
+        DWORD callbackCount = static_cast<DWORD>(wd.RegistryCallbacks.size());
+        
+        // Update count label
+        wchar_t countLabel[32];
+        StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", callbackCount);
+        SetWindowText(wh.RegistryCallbacksCountLabel, countLabel);
+        LogDebug(L"Updated count label: %s", countLabel);
+        
+        // Log each callback found
+        for (DWORD i = 0; i < callbackCount; i++) {
+            LogDebug(L"Callback[%d]: Name=%hs, Type=%d, Address=0x%p, Module=%hs",
+                    i,
+                    wd.RegistryCallbacks[i].CallbackName,
+                    wd.RegistryCallbacks[i].Type,
+                    wd.RegistryCallbacks[i].Address,
+                    wd.RegistryCallbacks[i].ModuleName);
+        }
+        
+        // Update list view with the callbacks from the window data
+        PopulateCallbackListView(wh.RegistryCallbacksListView, wd.RegistryCallbacks.data(), callbackCount);
+    } else {
+        LogError(L"Failed to enumerate registry callbacks");
         MessageBox(wh.Main, L"Failed to get registry callbacks", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
     }
-    LogInfo(L"Successfully received callback data. BytesReturned: %d", bytesReturned);
-
-    // Validate the response
-    if (bytesReturned < sizeof(CALLBACK_ENUM_REQUEST)) {
-        LogError(L"Insufficient data received. BytesReturned: %d, Minimum expected: %d", 
-                bytesReturned, sizeof(CALLBACK_ENUM_REQUEST));
-        MessageBox(wh.Main, L"Insufficient data received from driver", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    LogInfo(L"Found %d registry callbacks", request->FoundCallbacks);
-    
-    // Update count label
-    wchar_t countLabel[32];
-    StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", request->FoundCallbacks);
-    SetWindowText(wh.RegistryCallbacksCountLabel, countLabel);
-
-    // Validate callback data before populating
-    if (request->FoundCallbacks > maxCallbacks) {
-        LogError(L"Driver returned too many callbacks: %d (max: %d)", 
-                request->FoundCallbacks, maxCallbacks);
-        MessageBox(wh.Main, L"Invalid callback count received", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    // Update list view
-    PopulateCallbackListView(wh.RegistryCallbacksListView, request->Callbacks, request->FoundCallbacks);
 
     CloseHandle(deviceHandle);
-    LogInfo(L"Registry callback refresh completed successfully");
+    LogInfo(L"Registry callback refresh completed");
 }
 
 void RefreshFilesystemCallbacks()
@@ -2192,29 +2513,23 @@ void RefreshFilesystemCallbacks()
     }
     LogInfo(L"Successfully opened driver handle");
 
-    // Keep the calculation simple - just use a fixed size for the entire buffer
-    // that's big enough to hold the header plus all possible callbacks
+    // For filesystem callbacks, we can directly use the driver's IOCTL with a null table address
     const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
-    const DWORD headerSize = sizeof(CALLBACK_ENUM_REQUEST) - sizeof(CALLBACK_INFO_SHARED); // Header without the first array element
-    const DWORD callbacksSize = maxCallbacks * sizeof(CALLBACK_INFO_SHARED);
-    const DWORD requestSize = headerSize + callbacksSize;
+    const DWORD requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
     
-    LogDebug(L"Allocating buffer. Size: %d bytes (header: %d + callbacks: %d), Max callbacks: %d", 
-             requestSize, headerSize, callbacksSize, maxCallbacks);
-
-    // Allocate buffer for the request, zeroing it out
+    // Allocate buffer for the request
     std::vector<BYTE> requestBuffer(requestSize, 0);
     PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-
+    
     // Initialize request
     request->Type = CallbackTableFilesystem;
-    request->TableAddress = nullptr; // Driver will find the table
+    request->TableAddress = nullptr; // For filesystem callbacks, we don't need a table address
     request->MaxCallbacks = maxCallbacks;
     request->FoundCallbacks = 0;
-
+    
     // Send request to driver
     DWORD bytesReturned = 0;
-    LogInfo(L"Sending IOCTL_ENUM_CALLBACKS to driver...");
+    LogInfo(L"Sending IOCTL_ENUM_CALLBACKS to driver for filesystem callbacks...");
     BOOL success = DeviceIoControl(
         deviceHandle,
         IOCTL_ENUM_CALLBACKS,
@@ -2223,117 +2538,117 @@ void RefreshFilesystemCallbacks()
         &bytesReturned,
         nullptr
     );
-
-    if (!success) {
+    
+    if (success) {
+        LogInfo(L"Successfully retrieved %d filesystem callbacks", request->FoundCallbacks);
+        
+        // Clear and resize the filesystem callbacks vector
+        wd.FilesystemCallbacks.clear();
+        wd.FilesystemCallbacks.resize(request->FoundCallbacks);
+        
+        // Copy callbacks to the window data structure
+        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
+            wd.FilesystemCallbacks[i] = request->Callbacks[i];
+        }
+        
+        // Update count label
+        wchar_t countLabel[32];
+        StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", request->FoundCallbacks);
+        SetWindowText(wh.FilesystemCallbacksCountLabel, countLabel);
+        LogDebug(L"Updated count label: %s", countLabel);
+        
+        // Log each callback found
+        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
+            LogDebug(L"Callback[%d]: Name=%hs, Type=%d, Address=0x%p, Module=%hs",
+                    i,
+                    request->Callbacks[i].CallbackName,
+                    request->Callbacks[i].Type,
+                    request->Callbacks[i].Address,
+                    request->Callbacks[i].ModuleName);
+        }
+        
+        // Update list view
+        PopulateCallbackListView(wh.FilesystemCallbacksListView, request->Callbacks, request->FoundCallbacks);
+    } else {
         DWORD error = GetLastError();
         LogError(L"DeviceIoControl failed. Error code: %d", error);
-        LogError(L"BytesReturned: %d, Expected: %d", bytesReturned, requestSize);
         MessageBox(wh.Main, L"Failed to get filesystem callbacks", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
     }
-    LogInfo(L"Successfully received callback data. BytesReturned: %d", bytesReturned);
-
-    // Validate the response
-    if (bytesReturned < sizeof(CALLBACK_ENUM_REQUEST)) {
-        LogError(L"Insufficient data received. BytesReturned: %d, Minimum expected: %d", 
-                bytesReturned, sizeof(CALLBACK_ENUM_REQUEST));
-        MessageBox(wh.Main, L"Insufficient data received from driver", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    LogInfo(L"Found %d filesystem callbacks", request->FoundCallbacks);
-    
-    // Update count label
-    wchar_t countLabel[32];
-    StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", request->FoundCallbacks);
-    SetWindowText(wh.FilesystemCallbacksCountLabel, countLabel);
-
-    // Validate callback data before populating
-    if (request->FoundCallbacks > maxCallbacks) {
-        LogError(L"Driver returned too many callbacks: %d (max: %d)", 
-                request->FoundCallbacks, maxCallbacks);
-        MessageBox(wh.Main, L"Invalid callback count received", L"Error", MB_OK | MB_ICONERROR);
-        CloseHandle(deviceHandle);
-        return;
-    }
-
-    // Update list view
-    PopulateCallbackListView(wh.FilesystemCallbacksListView, request->Callbacks, request->FoundCallbacks);
 
     CloseHandle(deviceHandle);
-    LogInfo(L"Filesystem callback refresh completed successfully");
+    LogInfo(L"Filesystem callback refresh completed");
 }
 
 void RefreshObjectCallbacks()
 {
+    LogInfo(L"Starting object callback refresh...");
+
     HANDLE deviceHandle = OpenDriverHandle();
     if (deviceHandle == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        LogError(L"Failed to open driver handle. Error code: %d", error);
         MessageBox(wh.Main, L"Failed to open driver handle", L"Error", MB_OK | MB_ICONERROR);
         return;
     }
+    LogInfo(L"Successfully opened driver handle");
 
-    const DWORD maxCallbacks = MAX_CALLBACKS_SHARED;
-    const DWORD requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks * sizeof(CALLBACK_INFO_SHARED));
-    std::vector<BYTE> buffer(requestSize, 0);
-    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(buffer.data());
-
-    // For object callbacks, we need to enumerate both process and thread handle callbacks
-    std::vector<CALLBACK_INFO_SHARED> allCallbacks;
-
-    // First, get process handle callbacks
-    request->Type = CallbackTableCreateProcess;
-    request->MaxCallbacks = maxCallbacks;
-
-    DWORD bytesReturned = 0;
-    BOOL success = DeviceIoControl(
-        deviceHandle,
-        IOCTL_ENUM_CALLBACKS,
-        request, requestSize,
-        request, requestSize,
-        &bytesReturned,
-        nullptr
-    );
-
-    if (success) {
-        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
-            if (request->Callbacks[i].Type == CALLBACK_TYPE::ObProcessHandlePre ||
-                request->Callbacks[i].Type == CALLBACK_TYPE::ObProcessHandlePost) {
-                allCallbacks.push_back(request->Callbacks[i]);
+    // Object callbacks come from both process and thread callbacks with specific types
+    // First clear the object callbacks vector
+    wd.ObjectCallbacks.clear();
+    
+    // We'll need to get both process and thread callbacks
+    bool processSuccess = EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateProcess, SYMBOL_PROCESS_CALLBACKS);
+    bool threadSuccess = EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS);
+    
+    if (processSuccess || threadSuccess) {
+        LogInfo(L"Successfully retrieved callback information");
+        
+        // Extract object callbacks from process and thread callbacks
+        for (const auto& callback : wd.ProcessCallbacks) {
+            if (callback.Type == CALLBACK_TYPE::ObProcessHandlePre ||
+                callback.Type == CALLBACK_TYPE::ObProcessHandlePost) {
+                wd.ObjectCallbacks.push_back(callback);
             }
         }
-    }
-
-    // Then, get thread handle callbacks
-    request->Type = CallbackTableCreateThread;
-    success = DeviceIoControl(
-        deviceHandle,
-        IOCTL_ENUM_CALLBACKS,
-        request, requestSize,
-        request, requestSize,
-        &bytesReturned,
-        nullptr
-    );
-
-    if (success) {
-        for (DWORD i = 0; i < request->FoundCallbacks; i++) {
-            if (request->Callbacks[i].Type == CALLBACK_TYPE::ObThreadHandlePre ||
-                request->Callbacks[i].Type == CALLBACK_TYPE::ObThreadHandlePost) {
-                allCallbacks.push_back(request->Callbacks[i]);
+        
+        for (const auto& callback : wd.ThreadCallbacks) {
+            if (callback.Type == CALLBACK_TYPE::ObThreadHandlePre ||
+                callback.Type == CALLBACK_TYPE::ObThreadHandlePost) {
+                wd.ObjectCallbacks.push_back(callback);
             }
         }
-    }
-
-    wchar_t countLabel[32];
-    StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", (DWORD)allCallbacks.size());
-    SetWindowText(wh.ObjectCallbacksCountLabel, countLabel);
-
-    if (!allCallbacks.empty()) {
-        PopulateCallbackListView(wh.ObjectCallbacksListView, allCallbacks.data(), (DWORD)allCallbacks.size());
+        
+        // Update count label
+        DWORD callbackCount = static_cast<DWORD>(wd.ObjectCallbacks.size());
+        wchar_t countLabel[32];
+        StringCchPrintf(countLabel, _countof(countLabel), L"Callbacks found: %d", callbackCount);
+        SetWindowText(wh.ObjectCallbacksCountLabel, countLabel);
+        LogDebug(L"Updated count label: %s", countLabel);
+        
+        // Log each callback found
+        for (DWORD i = 0; i < callbackCount; i++) {
+            LogDebug(L"Callback[%d]: Name=%hs, Type=%d, Address=0x%p, Module=%hs",
+                    i,
+                    wd.ObjectCallbacks[i].CallbackName,
+                    wd.ObjectCallbacks[i].Type,
+                    wd.ObjectCallbacks[i].Address,
+                    wd.ObjectCallbacks[i].ModuleName);
+        }
+        
+        // Update list view
+        if (!wd.ObjectCallbacks.empty()) {
+            PopulateCallbackListView(wh.ObjectCallbacksListView, wd.ObjectCallbacks.data(), callbackCount);
+        } else {
+            // Clear the list view if no callbacks found
+            ListView_DeleteAllItems(wh.ObjectCallbacksListView);
+        }
+    } else {
+        LogError(L"Failed to enumerate object callbacks");
+        MessageBox(wh.Main, L"Failed to get object callbacks", L"Error", MB_OK | MB_ICONERROR);
     }
 
     CloseHandle(deviceHandle);
+    LogInfo(L"Object callback refresh completed");
 }
 
 void CopySelectedModule()
