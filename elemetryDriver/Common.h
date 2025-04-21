@@ -3,6 +3,7 @@
 #include <ntdef.h>
 #include <ntddk.h>
 #include <wdm.h>
+#include "../elemetryClient/SharedDefs.h"
 
 // System Information Class definitions
 typedef enum _SYSTEM_INFORMATION_CLASS {
@@ -12,8 +13,8 @@ typedef enum _SYSTEM_INFORMATION_CLASS {
 // System module structures
 typedef struct _SYSTEM_MODULE {
     ULONG_PTR Reserved[2];
-    PVOID ImageBase;
-    ULONG ImageSize;
+    PVOID Base;
+    ULONG Size;
     ULONG Flags;
     USHORT Index;
     USHORT Unknown;
@@ -23,7 +24,7 @@ typedef struct _SYSTEM_MODULE {
 } SYSTEM_MODULE, *PSYSTEM_MODULE;
 
 typedef struct _SYSTEM_MODULE_INFORMATION {
-    ULONG Count;
+    ULONG_PTR ulModuleCount;
     SYSTEM_MODULE Modules[1];
 } SYSTEM_MODULE_INFORMATION, *PSYSTEM_MODULE_INFORMATION;
 
@@ -149,4 +150,23 @@ typedef struct _CALLBACK_ENUM_REQUEST {
 typedef NTSTATUS (*PENUM_CALLBACKS_CALLBACK)(
     _In_ PCALLBACK_INFO_SHARED CallbackInfo,
     _In_opt_ PVOID Context
-); 
+);
+
+// Function declarations for kernel-mode operations
+NTSTATUS GetModuleInformation(PSYSTEM_MODULE_INFORMATION* SystemModuleInfo);
+NTSTATUS GetCallbackTable(CALLBACK_TABLE_TYPE Type, PVOID* Table);
+NTSTATUS EnumerateCallbacks(PCALLBACK_ENUM_REQUEST Request);
+
+// Kernel-mode specific callback structures
+typedef struct _CALLBACK_NODE {
+    LIST_ENTRY Entry;
+    CALLBACK_TYPE Type;
+    PVOID Callback;
+    PVOID Context;
+    BOOLEAN Suppressed;
+} CALLBACK_NODE, *PCALLBACK_NODE;
+
+typedef struct _CALLBACK_TABLE {
+    KSPIN_LOCK Lock;
+    LIST_ENTRY Head;
+} CALLBACK_TABLE, *PCALLBACK_TABLE; 
