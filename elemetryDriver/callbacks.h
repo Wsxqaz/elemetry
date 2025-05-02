@@ -17,7 +17,6 @@
 extern const ULONG g_HardcodedModuleCount; // Allow elemetryDriver.cpp to see this
 
 // --- Initialization and Cleanup ---
-NTSTATUS InitializeCallbackTracking();
 VOID CleanupCallbackTracking();
 
 // --- Module Operations ---
@@ -97,12 +96,6 @@ NTSTATUS EnumerateFilesystemCallbacks(
     _Out_ PULONG FoundCallbacks
 );
 
-// --- Callback Management ---
-NTSTATUS RegisterCallback(PCALLBACK_INFO_SHARED CallbackInfo);
-ULONG GetCallbackCount();
-NTSTATUS GetCallbackByIndex(_In_ ULONG Index, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
-NTSTATUS GetCallbackByName(_In_ PCSTR CallbackName, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
-NTSTATUS GetCallbackByAddress(_In_ PVOID CallbackAddress, _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo);
 
 // Forward declaration of DriverUnload function
 VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject);

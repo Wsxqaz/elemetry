@@ -288,11 +288,11 @@ NTSTATUS GetDynamicModules(
                     status = AuxKlibQueryModuleInformation(&AuxModulesBufferSize, sizeof(AUX_MODULE_EXTENDED_INFO), AuxModuleInfo);
                     if (NT_SUCCESS(status)) {
                         ULONG AuxModuleCount = AuxModulesBufferSize / sizeof(AUX_MODULE_EXTENDED_INFO);
-                        
+
                         // Check for modules not found in the first enumeration
                         for (ULONG i = 0; i < AuxModuleCount; i++) {
                             BOOLEAN alreadyFound = FALSE;
-                            
+
                             // Check if this module was already found
                             for (ULONG j = 0; j < foundCount; j++) {
                                 if (g_FoundModules[j].BaseAddress == AuxModuleInfo[i].BasicInfo.ImageBase) {
@@ -300,7 +300,7 @@ NTSTATUS GetDynamicModules(
                                     break;
                                 }
                             }
-                            
+
                             if (!alreadyFound) {
                                 // Reallocate internal storage if needed
                                 if (foundCount >= g_ModuleCount) {
@@ -313,18 +313,18 @@ NTSTATUS GetDynamicModules(
                                         DbgPrint("[elemetry] GetDynamicModules: Failed to reallocate for additional modules\n");
                                         break;
                                     }
-                                    
+
                                     RtlCopyMemory(newModules, g_FoundModules, foundCount * sizeof(MODULE_INFO));
                                     ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
                                     g_FoundModules = newModules;
                                     g_ModuleCount = foundCount + 1;
                                 }
-                                
+
                                 // Store the new module
                                 g_FoundModules[foundCount].BaseAddress = AuxModuleInfo[i].BasicInfo.ImageBase;
                                 g_FoundModules[foundCount].Size = AuxModuleInfo[i].ImageSize;
                                 g_FoundModules[foundCount].Flags = 0;
-                                
+
                                 // Convert and copy the module path
                                 ANSI_STRING ansiName;
                                 UNICODE_STRING unicodeName;
@@ -332,17 +332,17 @@ NTSTATUS GetDynamicModules(
                                 RtlAnsiStringToUnicodeString(&unicodeName, &ansiName, TRUE);
                                 wcscpy_s(g_FoundModules[foundCount].Path, MAX_PATH, unicodeName.Buffer);
                                 RtlFreeUnicodeString(&unicodeName);
-                                
+
                                 // Copy to output buffer if provided and there's space
                                 if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
                                     RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[foundCount], sizeof(MODULE_INFO));
                                 }
-                                
+
                                 foundCount++;
                             }
                         }
                     }
-                    
+
                     ExFreePoolWithTag(AuxModuleInfo, DRIVER_TAG);
                 }
             }
@@ -401,174 +401,7 @@ NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
     return Status;
 }
 
-// Initialize callback tracking
-NTSTATUS InitializeCallbackTracking()
-{
-    DbgPrint("[elemetry] Initializing callback tracking...\n");
 
-    // Ensure module information is populated first
-    if (!g_ModulesInitialized) {
-        DbgPrint("[elemetry] InitializeCallbackTracking: Modules not initialized, attempting now...\n");
-        ULONG bytesWritten = 0;
-        NTSTATUS moduleStatus = GetDynamicModules(NULL, 0, &bytesWritten); // Call just to populate internal storage
-        if (!NT_SUCCESS(moduleStatus) && moduleStatus != STATUS_BUFFER_TOO_SMALL) { // Ignore buffer too small as we didn't provide one
-            DbgPrint("[elemetry] InitializeCallbackTracking: Failed to initialize modules: 0x%X\n", moduleStatus);
-            // Continue with potentially NULL addresses, or return error?
-            // For now, continue.
-        } else if (!g_ModulesInitialized) {
-             DbgPrint("[elemetry] InitializeCallbackTracking: GetDynamicModules succeeded but flag not set?!");
-             // Proceed cautiously
-        } else {
-             DbgPrint("[elemetry] InitializeCallbackTracking: Modules initialized successfully.");
-        }
-    }
-
-    // Zero out the callback array
-    RtlZeroMemory(g_CallbackInfo, sizeof(g_CallbackInfo));
-    g_CallbackCount = 0;
-
-    DbgPrint("[elemetry] Initialization complete. Found %lu modules. Callback registration skipped (using exports now).\n", g_ModuleCount);
-    return STATUS_SUCCESS;
-}
-
-// Clean up callback tracking
-VOID CleanupCallbackTracking()
-{
-    DbgPrint("[elemetry] Cleaning up %d callbacks...\n", g_CallbackCount);
-    
-    // First, wait for any pending operations to complete
-    LARGE_INTEGER delay;
-    delay.QuadPart = -10000000; // 1 second delay
-    KeDelayExecutionThread(KernelMode, FALSE, &delay);
-    
-    // Reset callback count and clear the array
-    g_CallbackCount = 0;
-    RtlZeroMemory(g_CallbackInfo, sizeof(g_CallbackInfo));
-    
-    // Clear module information
-    DbgPrint("[elemetry] Clearing module information...\n");
-    if (g_FoundModules) {
-        ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
-        g_FoundModules = NULL;
-    }
-    g_ModuleCount = 0;
-    g_ModulesInitialized = FALSE;
-    
-    // Clear static buffers
-    RtlZeroMemory(g_ModuleInfoBuffer, MODULE_INFO_BUFFER_SIZE);
-    RtlZeroMemory(g_SystemModuleBuffer, SYSTEM_MODULE_BUFFER_SIZE);
-    
-    // Wait again to ensure all resources are released
-    delay.QuadPart = -10000000; // 1 second delay
-    KeDelayExecutionThread(KernelMode, FALSE, &delay);
-    
-    DbgPrint("[elemetry] Callback tracking cleanup complete\n");
-}
-
-// Register a new callback
-NTSTATUS RegisterCallback(PCALLBACK_INFO_SHARED CallbackInfo) {
-    if (g_CallbackCount >= MAX_CALLBACKS_SHARED) {
-        DbgPrint("[elemetry] Cannot register callback - maximum limit reached\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    if (!CallbackInfo || !CallbackInfo->CallbackName[0] || !CallbackInfo->Address) {
-        DbgPrint("[elemetry] Invalid callback parameters\n");
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    // Store callback information
-    RtlCopyMemory(&g_CallbackInfo[g_CallbackCount], CallbackInfo, sizeof(CALLBACK_INFO_SHARED));
-    g_CallbackCount++;
-
-    DbgPrint("[elemetry] Registered callback: %s in %s at %p\n",
-             CallbackInfo->CallbackName,
-             CallbackInfo->ModuleName,
-             CallbackInfo->Address);
-
-    return STATUS_SUCCESS;
-}
-
-// Enumerate all registered callbacks
-NTSTATUS EnumerateCallbacks(
-    _In_ PENUM_CALLBACKS_CALLBACK EnumCallback,
-    _In_opt_ PVOID Context
-)
-{
-    DbgPrint("[elemetry] EnumerateCallbacks: Starting enumeration... Count: %u\n", g_CallbackCount);
-    if (!EnumCallback) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    NTSTATUS Status = STATUS_SUCCESS;
-    for (ULONG i = 0; i < g_CallbackCount; i++) {
-        DbgPrint("[elemetry] EnumerateCallbacks: Processing index %u, Address %p\n", i, g_CallbackInfo[i].Address);
-        __try {
-            NTSTATUS CallbackStatus = EnumCallback(&g_CallbackInfo[i], Context);
-            if (!NT_SUCCESS(CallbackStatus)) {
-                DbgPrint("[elemetry] EnumerateCallbacks: Callback returned error 0x%X for index %u\n", CallbackStatus, i);
-            }
-        } __except(EXCEPTION_EXECUTE_HANDLER) {
-            DbgPrint("[elemetry] EnumerateCallbacks: Exception while processing callback index %u\n", i);
-        }
-    }
-    DbgPrint("[elemetry] EnumerateCallbacks: Enumeration complete.\n");
-    return Status;
-}
-
-// Get callback count
-ULONG GetCallbackCount() {
-    return g_CallbackCount;
-}
-
-// Get callback by index
-NTSTATUS GetCallbackByIndex(
-    _In_ ULONG Index,
-    _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo
-)
-{
-    if (Index >= g_CallbackCount || !SharedCallbackInfo) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    RtlCopyMemory(SharedCallbackInfo, &g_CallbackInfo[Index], sizeof(CALLBACK_INFO_SHARED));
-    return STATUS_SUCCESS;
-}
-
-// Get callback by name
-NTSTATUS GetCallbackByName(
-    _In_ PCSTR CallbackName,
-    _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo
-) {
-    if (!CallbackName || !SharedCallbackInfo) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    for (ULONG i = 0; i < g_CallbackCount; i++) {
-        if (strncmp(g_CallbackInfo[i].CallbackName, CallbackName, MAX_PATH - 1) == 0) {
-            RtlCopyMemory(SharedCallbackInfo, &g_CallbackInfo[i], sizeof(CALLBACK_INFO_SHARED));
-            return STATUS_SUCCESS;
-        }
-    }
-    return STATUS_NOT_FOUND;
-}
-
-// Get callback by address
-NTSTATUS GetCallbackByAddress(
-    _In_ PVOID CallbackAddress,
-    _Out_ PCALLBACK_INFO_SHARED SharedCallbackInfo
-) {
-    if (!CallbackAddress || !SharedCallbackInfo) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    for (ULONG i = 0; i < g_CallbackCount; i++) {
-        if (g_CallbackInfo[i].Address == CallbackAddress) {
-            RtlCopyMemory(SharedCallbackInfo, &g_CallbackInfo[i], sizeof(CALLBACK_INFO_SHARED));
-            return STATUS_SUCCESS;
-        }
-    }
-    return STATUS_NOT_FOUND;
-}
 
 // --- Helper Functions ---
 
@@ -645,7 +478,7 @@ extern "C" NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_
         status = ReadKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
         if (!NT_SUCCESS(status)) {
             DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Normal read failed (0x%X), trying protected read\n", status);
-            
+
             // Check if the IRP has been cancelled
             if (Irp->Cancel) {
                 DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled during table validation\n");
@@ -669,7 +502,7 @@ extern "C" NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_
         validTable = TRUE;
         DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Skipping table validation for filesystem callbacks\n");
     }
-    
+
     // Check if the IRP has been cancelled
     if (Irp->Cancel) {
         DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled before callback enumeration\n");
@@ -848,7 +681,7 @@ extern "C" NTSTATUS EnumerateLoadImageCallbacks(
         // Read the pointer to the callback structure
         PVOID pointerToCallback = NULL;
         SIZE_T bytesRead = 0;
-        
+
         status = ReadProtectedKernelMemory(
             (PVOID)((ULONG_PTR)CallbackTable + i * sizeof(PVOID)),
             &pointerToCallback,
@@ -1200,7 +1033,7 @@ NTSTATUS EnumerateRegistryCallbacks(
 
     // Get the current thread's IRP (if there is one)
     PIRP currentIrp = GetCurrentIrpSafe();
-    
+
     // Check if we're executing in an IRP context and if that IRP is cancelable
     if (currentIrp && (currentIrp->Cancel)) {
         DbgPrint("[elemetry] EnumerateRegistryCallbacks: IRP already cancelled before starting\n");
@@ -1220,7 +1053,7 @@ NTSTATUS EnumerateRegistryCallbacks(
     }
 
     // Debug the list head values
-    DbgPrint("[elemetry] EnumerateRegistryCallbacks: List head values - Flink: %p, Blink: %p\n", 
+    DbgPrint("[elemetry] EnumerateRegistryCallbacks: List head values - Flink: %p, Blink: %p\n",
              listHead.Flink, listHead.Blink);
 
     // Define the basic registry callback entry structure based on Windows internals
@@ -1239,13 +1072,13 @@ NTSTATUS EnumerateRegistryCallbacks(
         DbgPrint("[elemetry] EnumerateRegistryCallbacks: Registry callback list is empty\n");
         return STATUS_SUCCESS;
     }
-    
+
     // Check if Flink or Blink is NULL
     if (listHead.Flink == NULL || listHead.Blink == NULL) {
         DbgPrint("[elemetry] EnumerateRegistryCallbacks: Invalid list head (NULL pointers)\n");
         return STATUS_INVALID_ADDRESS;
     }
-    
+
     // Check for reasonable list head values (must be within kernel space)
     if ((ULONG_PTR)listHead.Flink < (ULONG_PTR)MmSystemRangeStart ||
         (ULONG_PTR)listHead.Blink < (ULONG_PTR)MmSystemRangeStart) {
@@ -1257,17 +1090,17 @@ NTSTATUS EnumerateRegistryCallbacks(
     // Windows Server 2022 appears to have the CmpCallbackListLock at this location and list head 16 bytes later
     PVOID alternateListHead = (PVOID)((ULONG_PTR)CallbackTable + 0x10);
     LIST_ENTRY altListHead = {0};
-    
+
     // Try to read the alternate list head location
     status = ReadProtectedKernelMemory(alternateListHead, &altListHead, sizeof(LIST_ENTRY), &bytesRead);
-    if (NT_SUCCESS(status) && bytesRead == sizeof(LIST_ENTRY) && 
+    if (NT_SUCCESS(status) && bytesRead == sizeof(LIST_ENTRY) &&
         altListHead.Flink != NULL && altListHead.Blink != NULL &&
         (ULONG_PTR)altListHead.Flink >= (ULONG_PTR)MmSystemRangeStart &&
         (ULONG_PTR)altListHead.Blink >= (ULONG_PTR)MmSystemRangeStart) {
-        
+
         DbgPrint("[elemetry] EnumerateRegistryCallbacks: Found valid alternate list head at %p (Flink: %p, Blink: %p)\n",
                  alternateListHead, altListHead.Flink, altListHead.Blink);
-        
+
         // Use the alternate list head instead
         CallbackTable = alternateListHead;
         listHead = altListHead;
@@ -1286,19 +1119,19 @@ NTSTATUS EnumerateRegistryCallbacks(
     visitedEntries[visitedCount++] = CallbackTable;
 
     // Walk the list safely
-    while (currentEntry != NULL && 
+    while (currentEntry != NULL &&
            currentEntry != CallbackTable &&  // Stop when we loop back to head
-           count < maxEntries && 
+           count < maxEntries &&
            visitedCount < ARRAYSIZE(visitedEntries)) {
-        
+
         // Periodically check if the IRP has been cancelled (every 10 entries)
         if ((visitedCount % 10) == 0 && currentIrp && currentIrp->Cancel) {
-            DbgPrint("[elemetry] EnumerateRegistryCallbacks: IRP cancelled during enumeration at entry %d\n", 
+            DbgPrint("[elemetry] EnumerateRegistryCallbacks: IRP cancelled during enumeration at entry %d\n",
                      visitedCount);
             *FoundCallbacks = count; // Return what we have so far
             return STATUS_CANCELLED;
         }
-        
+
         // Check if we've already seen this entry (circular reference)
         BOOLEAN alreadyVisited = FALSE;
         for (ULONG i = 0; i < visitedCount; i++) {
@@ -1308,24 +1141,24 @@ NTSTATUS EnumerateRegistryCallbacks(
                 break;
             }
         }
-        
+
         if (alreadyVisited) {
             break; // Exit loop if circular reference detected
         }
-        
+
         // Record this entry as visited
         visitedEntries[visitedCount++] = currentEntry;
-        
+
         // Read the callback entry, but be cautious with memory access
         CM_CALLBACK_ENTRY entry = {0};
         status = ReadProtectedKernelMemory(currentEntry, &entry, sizeof(CM_CALLBACK_ENTRY), &bytesRead);
-        
+
         if (!NT_SUCCESS(status) || bytesRead < sizeof(CM_CALLBACK_ENTRY)) {
-            DbgPrint("[elemetry] EnumerateRegistryCallbacks: Failed to read entry at %p: 0x%X\n", 
+            DbgPrint("[elemetry] EnumerateRegistryCallbacks: Failed to read entry at %p: 0x%X\n",
                     currentEntry, status);
             break;
         }
-        
+
         // Validate the callback function pointer
         if (entry.Function == NULL) {
             DbgPrint("[elemetry] EnumerateRegistryCallbacks: Skipping entry with NULL function pointer\n");
@@ -1333,70 +1166,70 @@ NTSTATUS EnumerateRegistryCallbacks(
             currentEntry = entry.ListEntry.Flink;
             continue;
         }
-        
+
         // Looks like a valid entry, add it to our results
         RtlZeroMemory(&CallbackArray[count], sizeof(CALLBACK_INFO_SHARED));
-        
+
         CallbackArray[count].Type = static_cast<CALLBACK_TYPE>(CALLBACK_TYPE::CmRegistry);
         CallbackArray[count].Address = entry.Function;
         CallbackArray[count].Context = (ULONG)(ULONG_PTR)entry.Context;
-        
+
         // Try to determine which module this callback belongs to
         ULONG_PTR callbackAddress = (ULONG_PTR)entry.Function;
         BOOLEAN found = FALSE;
-        
+
         // Search through our known modules
         for (ULONG m = 0; m < g_ModuleCount; m++) {
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
-                
+
                 // Check if callback address is within this module's range
                 if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
                     // Extract just the filename from path
                     WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
                     PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
-                    
+
                     // Convert wide char to char (ASCII only)
                     for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
                         CallbackArray[count].ModuleName[c] = (CHAR)FileNameOnly[c];
                     }
-                    
+
                     // Set name based on offset from module base
                     sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME,
                             "RegistryCallback+0x%llX", (ULONG_PTR)callbackAddress - moduleBase);
-                    
+
                     found = TRUE;
                     break;
                 }
             }
         }
-        
+
         // If we couldn't determine the module, use generic naming
         if (!found) {
             RtlCopyMemory(CallbackArray[count].ModuleName, "Unknown", sizeof("Unknown"));
             sprintf_s(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME,
                     "RegistryCallback@0x%p", entry.Function);
         }
-        
+
         // Increment our counter and move to the next entry
         count++;
-        
+
         // Safety check for Flink pointer
-        if (entry.ListEntry.Flink == NULL || 
+        if (entry.ListEntry.Flink == NULL ||
             entry.ListEntry.Flink == currentEntry) {
             DbgPrint("[elemetry] EnumerateRegistryCallbacks: Invalid Flink pointer detected\n");
             break;
         }
-        
+
         // Move to next entry
         currentEntry = entry.ListEntry.Flink;
     }
-    
+
     // Update the caller with how many we found
     *FoundCallbacks = count;
     DbgPrint("[elemetry] EnumerateRegistryCallbacks: Found %u registry callbacks\n", count);
-    
+
     return STATUS_SUCCESS;
 }
 
@@ -1509,9 +1342,9 @@ NTSTATUS EnumerateFilesystemCallbacks(
 
         // Get the full module path from the filter information
         // Correctly access the FilterNameBuffer within the struct
-        WCHAR* modulePath = FullFilterInfo->FilterNameBuffer; 
+        WCHAR* modulePath = FullFilterInfo->FilterNameBuffer;
         CHAR modulePathA[MAX_PATH] = { 0 };
-        
+
         // Convert Unicode to ANSI properly, using FilterNameLength (in bytes)
         ULONG bytesConverted = 0;
         NTSTATUS convertStatus = RtlUnicodeToMultiByteN(
@@ -1521,16 +1354,16 @@ NTSTATUS EnumerateFilesystemCallbacks(
             modulePath,
             FullFilterInfo->FilterNameLength // Input length in bytes
         );
-        
+
         if (!NT_SUCCESS(convertStatus)) {
             DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Failed to convert module path to ANSI: 0x%X\n", convertStatus);
             RtlStringCbCopyA(modulePathA, MAX_PATH, "Unknown"); // Fallback
             bytesConverted = (ULONG)strlen("Unknown"); // Update bytesConverted for fallback
-        } 
+        }
         // Explicitly null-terminate the ANSI buffer after conversion
         // bytesConverted holds the number of non-null bytes written by RtlUnicodeToMultiByteN
         // Ensure we don't write past the buffer boundary defined by MAX_PATH
-        if (bytesConverted < MAX_PATH) { 
+        if (bytesConverted < MAX_PATH) {
             modulePathA[bytesConverted] = '\0';
         } else {
              modulePathA[MAX_PATH - 1] = '\0'; // Ensure null termination even if conversion filled the buffer
@@ -1540,10 +1373,10 @@ NTSTATUS EnumerateFilesystemCallbacks(
         CHAR* LastBackslash = strrchr(modulePathA, '\\');
         PCSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : modulePathA;
 
-        // --- Debug Print Raw ANSI Buffer --- 
-        DbgPrint("[elemetry] Debug: Converted Module Raw: '%hs' (len=%lu), Filename: '%hs'\n", 
+        // --- Debug Print Raw ANSI Buffer ---
+        DbgPrint("[elemetry] Debug: Converted Module Raw: '%hs' (len=%lu), Filename: '%hs'\n",
                  modulePathA, bytesConverted, FileNameOnly);
-        // --- End Debug --- 
+        // --- End Debug ---
 
         // Get filter instances
         ULONG NumberInstancesReturned = 0;
@@ -1560,15 +1393,15 @@ NTSTATUS EnumerateFilesystemCallbacks(
         SIZE_T InstanceListSizeSZ = (SIZE_T)sizeof(PFLT_INSTANCE) * NumberInstancesReturned;
 
         // Check if the SIZE_T result fits within a ULONG
-        if (InstanceListSizeSZ > MAXULONG) { 
+        if (InstanceListSizeSZ > MAXULONG) {
             DbgPrint("[elemetry] EnumerateFilesystemCallbacks: Instance list size exceeds ULONG_MAX (%llu bytes)\n", InstanceListSizeSZ);
             ExFreePoolWithTag(FullFilterInfo, DRIVER_TAG);
             // Treat overflow as insufficient resources or a specific error
-            Status = STATUS_INSUFFICIENT_RESOURCES; 
+            Status = STATUS_INSUFFICIENT_RESOURCES;
             continue; // Skip this filter if size is too large
         } else {
             // Safe to cast to ULONG now
-            InstanceListSizeUL = (ULONG)InstanceListSizeSZ; 
+            InstanceListSizeUL = (ULONG)InstanceListSizeSZ;
         }
 
         // Allocate memory using the original SIZE_T calculation (or InstanceListSizeUL, promotion is safe)
@@ -1608,25 +1441,25 @@ NTSTATUS EnumerateFilesystemCallbacks(
                 if (PreCallback) {
                     CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 11);
                     CallbackArray[count].Address = PreCallback;
-                    
-                    // --- Start Debug --- 
-                    DbgPrint("[elemetry] Debug: PreCallback Module Raw: '%hs', Bytes Converted: %lu\n", 
+
+                    // --- Start Debug ---
+                    DbgPrint("[elemetry] Debug: PreCallback Module Raw: '%hs', Bytes Converted: %lu\n",
                              modulePathA, bytesConverted);
                     CHAR tempCallbackName[MAX_PATH] = {0};
-                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH, 
+                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH,
                                                                "PreOperation_%u", j - 0x16);
-                    DbgPrint("[elemetry] Debug: PreCallback Name Format Status: 0x%X, Name: '%hs'\n", 
+                    DbgPrint("[elemetry] Debug: PreCallback Name Format Status: 0x%X, Name: '%hs'\n",
                              formatStatus, tempCallbackName);
-                    // --- End Debug --- 
-                    
+                    // --- End Debug ---
+
                     // Copy the module name properly
                     RtlZeroMemory(CallbackArray[count].ModuleName, MAX_MODULE_NAME);
                     RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_MODULE_NAME, FileNameOnly);
-                    
+
                     // Format the callback name
                     RtlZeroMemory(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME);
-                    RtlStringCbCopyA(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, tempCallbackName); 
-                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                    RtlStringCbCopyA(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, tempCallbackName);
+                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH,
                     //                  "PreOperation_%u", j - 0x16);
                     count++;
                 }
@@ -1634,25 +1467,25 @@ NTSTATUS EnumerateFilesystemCallbacks(
                 if (PostCallback) {
                     CallbackArray[count].Type = static_cast<CALLBACK_TYPE>((j - 0x16) * 2 + 12);
                     CallbackArray[count].Address = PostCallback;
-                    
-                    // --- Start Debug --- 
-                    DbgPrint("[elemetry] Debug: PostCallback Module Raw: '%hs', Bytes Converted: %lu\n", 
+
+                    // --- Start Debug ---
+                    DbgPrint("[elemetry] Debug: PostCallback Module Raw: '%hs', Bytes Converted: %lu\n",
                              modulePathA, bytesConverted);
                     CHAR tempCallbackName[MAX_PATH] = {0};
-                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH, 
+                    NTSTATUS formatStatus = RtlStringCbPrintfA(tempCallbackName, MAX_PATH,
                                                                "PostOperation_%u", j - 0x16);
-                    DbgPrint("[elemetry] Debug: PostCallback Name Format Status: 0x%X, Name: '%hs'\n", 
+                    DbgPrint("[elemetry] Debug: PostCallback Name Format Status: 0x%X, Name: '%hs'\n",
                              formatStatus, tempCallbackName);
-                     // --- End Debug --- 
-                    
+                     // --- End Debug ---
+
                     // Copy the module name properly
                     RtlZeroMemory(CallbackArray[count].ModuleName, MAX_MODULE_NAME);
                     RtlStringCbCopyA(CallbackArray[count].ModuleName, MAX_MODULE_NAME, FileNameOnly);
-                    
+
                     // Format the callback name
                     RtlZeroMemory(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME);
                     RtlStringCbCopyA(CallbackArray[count].CallbackName, MAX_CALLBACK_NAME, tempCallbackName);
-                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH, 
+                    // RtlStringCbPrintfA(CallbackArray[count].CallbackName, MAX_PATH,
                     //                  "PostOperation_%u", j - 0x16);
                     count++;
                 }
@@ -1682,7 +1515,7 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
 
     // Get the callback address
     ULONG_PTR callbackAddress = (ULONG_PTR)CallbackInfo->Address;
-    
+
     // Check if it's in session space (0xFFFFB30F...)
     if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFB30000000000) {
         // This is a session space callback, likely from a driver
@@ -1695,7 +1528,7 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 if ((moduleBase & 0xFFFF000000000000) == 0xFFFFB30000000000) {
-                    ULONG_PTR distance = (callbackAddress > moduleBase) ? 
+                    ULONG_PTR distance = (callbackAddress > moduleBase) ?
                         (callbackAddress - moduleBase) : (moduleBase - callbackAddress);
                     if (distance < smallestDistance) {
                         smallestDistance = distance;
@@ -1710,12 +1543,12 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
             // Extract just the filename from path
             WCHAR* LastBackslash = wcsrchr(closestModuleName, L'\\');
             PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : closestModuleName;
-            
+
             // Convert wide char to char (ASCII only)
             for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
                 CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
             }
-            
+
             sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
                     "LoadImageCallback+0x%llX", callbackAddress - closestModuleBase);
         } else {
@@ -1733,7 +1566,7 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
         }
         return;
     }
-    
+
     // Check if it's in system space (0xFFFFF806...)
     if ((callbackAddress & 0xFFFF000000000000) == 0xFFFFF80000000000) {
         // Search through our known modules
@@ -1741,17 +1574,17 @@ void FindCallbackModuleInfo(PCALLBACK_INFO_SHARED CallbackInfo)
             if (g_FoundModules[m].BaseAddress != NULL) {
                 ULONG_PTR moduleBase = (ULONG_PTR)g_FoundModules[m].BaseAddress;
                 ULONG_PTR moduleEnd = moduleBase + g_FoundModules[m].Size;
-                
+
                 if (callbackAddress >= moduleBase && callbackAddress < moduleEnd) {
                     // Extract just the filename from path
                     WCHAR* LastBackslash = wcsrchr(g_FoundModules[m].Path, L'\\');
                     PCWSTR FileNameOnly = LastBackslash ? LastBackslash + 1 : g_FoundModules[m].Path;
-                    
+
                     // Convert wide char to char (ASCII only)
                     for (ULONG c = 0; FileNameOnly[c] && c < MAX_MODULE_NAME - 1; c++) {
                         CallbackInfo->ModuleName[c] = (CHAR)FileNameOnly[c];
                     }
-                    
+
                     sprintf_s(CallbackInfo->CallbackName, MAX_CALLBACK_NAME,
                             "LoadImageCallback+0x%llX", callbackAddress - moduleBase);
                     return;
