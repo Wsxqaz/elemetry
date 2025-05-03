@@ -48,8 +48,18 @@ void MainForm::CreateDriverModulesPage() {
         NULL
     );
 
+    if (!m_hDriverModulesPage) {
+        MessageBox(m_hWnd, L"Failed to create driver modules page", L"Error", MB_ICONERROR);
+        return;
+    }
+
     // Create the list view
     m_hDriverModulesListView = CreateListView(m_hDriverModulesPage, 10, 10, 860, 400, IDC_DRIVER_MODULES_LISTVIEW);
+
+    if (!m_hDriverModulesListView) {
+        MessageBox(m_hWnd, L"Failed to create driver modules list view", L"Error", MB_ICONERROR);
+        return;
+    }
 
     // Add columns
     AddListViewColumn(m_hDriverModulesListView, 0, L"Module Name", 200);
@@ -64,11 +74,25 @@ void MainForm::CreateDriverModulesPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hDriverModulesPage,
+        m_hWnd,  // Parent is main window instead of page
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
+
+    if (!m_hDriverModulesRefreshButton) {
+        MessageBox(m_hWnd, L"Failed to create refresh button", L"Error", MB_ICONERROR);
+        return;
+    }
+
+    // Set button position relative to page
+    RECT pageRect;
+    GetWindowRect(m_hDriverModulesPage, &pageRect);
+    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    SetWindowPos(m_hDriverModulesRefreshButton, NULL,
+        pageRect.left + 10, pageRect.top + 420,
+        100, 30,
+        SWP_NOZORDER);
 
     // Create the count label
     m_hDriverModulesCountLabel = CreateWindowEx(
@@ -82,6 +106,11 @@ void MainForm::CreateDriverModulesPage() {
         g_hInst,
         NULL
     );
+
+    if (!m_hDriverModulesCountLabel) {
+        MessageBox(m_hWnd, L"Failed to create count label", L"Error", MB_ICONERROR);
+        return;
+    }
 }
 
 void MainForm::CreateCallbacksPage() {
@@ -114,11 +143,20 @@ void MainForm::CreateCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hCallbacksPage,
+        m_hWnd,  // Parent is main window instead of page
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
+
+    // Set button position relative to page
+    RECT pageRect;
+    GetWindowRect(m_hCallbacksPage, &pageRect);
+    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    SetWindowPos(m_hCallbacksRefreshButton, NULL,
+        pageRect.left + 10, pageRect.top + 420,
+        100, 30,
+        SWP_NOZORDER);
 
     // Create the count label
     m_hCallbacksCountLabel = CreateWindowEx(
@@ -164,11 +202,20 @@ void MainForm::CreateRegistryCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hRegistryCallbacksPage,
+        m_hWnd,  // Parent is main window instead of page
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
+
+    // Set button position relative to page
+    RECT pageRect;
+    GetWindowRect(m_hRegistryCallbacksPage, &pageRect);
+    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    SetWindowPos(m_hRegistryCallbacksRefreshButton, NULL,
+        pageRect.left + 10, pageRect.top + 420,
+        100, 30,
+        SWP_NOZORDER);
 
     // Create the count label
     m_hRegistryCallbacksCountLabel = CreateWindowEx(
@@ -214,11 +261,20 @@ void MainForm::CreateMinifilterCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hMinifilterCallbacksPage,
+        m_hWnd,  // Parent is main window instead of page
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
+
+    // Set button position relative to page
+    RECT pageRect;
+    GetWindowRect(m_hMinifilterCallbacksPage, &pageRect);
+    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    SetWindowPos(m_hMinifilterCallbacksRefreshButton, NULL,
+        pageRect.left + 10, pageRect.top + 420,
+        100, 30,
+        SWP_NOZORDER);
 
     // Create the count label
     m_hMinifilterCallbacksCountLabel = CreateWindowEx(
@@ -282,13 +338,35 @@ void MainForm::CreateSymbolsPage() {
         NULL
     );
 
+    // Create the refresh button
+    m_hSymbolsRefreshButton = CreateWindowEx(
+        0,
+        L"BUTTON",
+        L"Refresh",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        330, 420, 100, 30,
+        m_hWnd,  // Parent is main window instead of page
+        (HMENU)IDC_REFRESH_BUTTON,
+        g_hInst,
+        NULL
+    );
+
+    // Set button position relative to page
+    RECT pageRect;
+    GetWindowRect(m_hSymbolsPage, &pageRect);
+    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    SetWindowPos(m_hSymbolsRefreshButton, NULL,
+        pageRect.left + 330, pageRect.top + 420,
+        100, 30,
+        SWP_NOZORDER);
+
     // Create the count label
     m_hSymbolsCountLabel = CreateWindowEx(
         0,
         L"STATIC",
         L"Symbols: 0",
         WS_CHILD | WS_VISIBLE,
-        330, 425, 200, 20,
+        440, 425, 200, 20,
         m_hSymbolsPage,
         NULL,
         g_hInst,
@@ -398,6 +476,7 @@ void MainForm::UpdateDriverModules() {
     // Get driver modules
     HANDLE deviceHandle = OpenDriverHandle();
     if (deviceHandle == INVALID_HANDLE_VALUE) {
+        MessageBox(m_hWnd, L"Failed to open driver handle", L"Error", MB_ICONERROR);
         return;
     }
 
@@ -417,36 +496,43 @@ void MainForm::UpdateDriverModules() {
         nullptr
     );
 
-    if (success) {
-        // Calculate number of modules returned
-        DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
+    if (!success) {
+        DWORD error = GetLastError();
+        wchar_t errorMsg[256];
+        swprintf_s(errorMsg, L"DeviceIoControl failed with error: %d", error);
+        MessageBox(m_hWnd, errorMsg, L"Error", MB_ICONERROR);
+        CloseHandle(deviceHandle);
+        return;
+    }
 
-        // Add items to the list view
-        for (DWORD i = 0; i < moduleCount; i++) {
-            LVITEM lvi = { 0 };
-            lvi.mask = LVIF_TEXT;
-            lvi.iItem = ListView_GetItemCount(m_hDriverModulesListView);
+    // Calculate number of modules returned
+    DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
 
-            // Module name
-            lvi.iSubItem = 0;
-            lvi.pszText = moduleInfos[i].Path;
-            ListView_InsertItem(m_hDriverModulesListView, &lvi);
+    // Add items to the list view
+    for (DWORD i = 0; i < moduleCount; i++) {
+        LVITEM lvi = { 0 };
+        lvi.mask = LVIF_TEXT;
+        lvi.iItem = ListView_GetItemCount(m_hDriverModulesListView);
 
-            // Base address
-            wchar_t addrBuffer[32];
-            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)moduleInfos[i].BaseAddress);
-            ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 1, addrBuffer);
+        // Module name
+        lvi.iSubItem = 0;
+        lvi.pszText = moduleInfos[i].Path;
+        ListView_InsertItem(m_hDriverModulesListView, &lvi);
 
-            // Size
-            wchar_t sizeBuffer[32];
-            swprintf_s(sizeBuffer, L"%u", moduleInfos[i].Size);
-            ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 2, sizeBuffer);
+        // Base address
+        wchar_t addrBuffer[32];
+        swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)moduleInfos[i].BaseAddress);
+        ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 1, addrBuffer);
 
-            // Flags
-            wchar_t flagsBuffer[32];
-            swprintf_s(flagsBuffer, L"0x%X", moduleInfos[i].Flags);
-            ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 3, flagsBuffer);
-        }
+        // Size
+        wchar_t sizeBuffer[32];
+        swprintf_s(sizeBuffer, L"%u", moduleInfos[i].Size);
+        ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 2, sizeBuffer);
+
+        // Flags
+        wchar_t flagsBuffer[32];
+        swprintf_s(flagsBuffer, L"0x%X", moduleInfos[i].Flags);
+        ListView_SetItemText(m_hDriverModulesListView, lvi.iItem, 3, flagsBuffer);
     }
 
     CloseHandle(deviceHandle);
@@ -461,57 +547,195 @@ void MainForm::UpdateCallbacks() {
     // Clear the list view
     ListView_DeleteAllItems(m_hCallbacksListView);
 
+    int len = 0;
+
     // Open a handle to the driver
     HANDLE deviceHandle = OpenDriverHandle();
     if (deviceHandle == INVALID_HANDLE_VALUE) {
         return;
     }
 
-    // Enumerate callbacks
-    EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableLoadImage, SYMBOL_LOAD_IMAGE_CALLBACKS);
-    EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateProcess, SYMBOL_PROCESS_CALLBACKS);
-    EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS);
+    const DWORD bufferSize = sizeof(CALLBACK_INFO_SHARED) * MAX_CALLBACKS_SHARED;
+    std::vector<BYTE> buffer(bufferSize, 0);
+    PCALLBACK_INFO_SHARED callbackInfos = reinterpret_cast<PCALLBACK_INFO_SHARED>(buffer.data());
+    ULONG foundCallbacks = 0;
+
+    // Load Image Callbacks
+    if (EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableLoadImage, SYMBOL_LOAD_IMAGE_CALLBACKS, callbackInfos, MAX_CALLBACKS_SHARED, foundCallbacks)) {
+        for (ULONG i = 0; i < foundCallbacks; i++) {
+            LVITEM lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = ListView_GetItemCount(m_hCallbacksListView);
+            lvi.iSubItem = 0;
+            wchar_t typeBuffer[32];
+            wcscpy_s(typeBuffer, L"Load Image");
+            lvi.pszText = typeBuffer;
+            ListView_InsertItem(m_hCallbacksListView, &lvi);
+            wchar_t addrBuffer[32];
+            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+            char safeModuleName[256];
+            strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
+            safeModuleName[255] = '\0';
+            wchar_t moduleBuffer[256];
+            int len = (int)strnlen(safeModuleName, 255);
+            if (len > 0)
+                MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
+            moduleBuffer[len] = L'\0';
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+        }
+    }
+
+    // Process Creation Callbacks
+    if (EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateProcess, SYMBOL_PROCESS_CALLBACKS, callbackInfos, MAX_CALLBACKS_SHARED, foundCallbacks)) {
+        for (ULONG i = 0; i < foundCallbacks; i++) {
+            LVITEM lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = ListView_GetItemCount(m_hCallbacksListView);
+            lvi.iSubItem = 0;
+            wchar_t typeBuffer[32];
+            wcscpy_s(typeBuffer, L"Process Creation");
+            lvi.pszText = typeBuffer;
+            ListView_InsertItem(m_hCallbacksListView, &lvi);
+            wchar_t addrBuffer[32];
+            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+            char safeModuleName[256];
+            strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
+            safeModuleName[255] = '\0';
+            wchar_t moduleBuffer[256];
+            len = (int)strnlen(safeModuleName, 255);
+            if (len > 0)
+                MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
+            moduleBuffer[len] = L'\0';
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+        }
+    }
+
+    // Thread Creation Callbacks
+    if (EnumerateCallbacksWithSymbolTable(deviceHandle, CallbackTableCreateThread, SYMBOL_THREAD_CALLBACKS, callbackInfos, MAX_CALLBACKS_SHARED, foundCallbacks)) {
+        for (ULONG i = 0; i < foundCallbacks; i++) {
+            LVITEM lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = ListView_GetItemCount(m_hCallbacksListView);
+            lvi.iSubItem = 0;
+            wchar_t typeBuffer[32];
+            wcscpy_s(typeBuffer, L"Thread Creation");
+            lvi.pszText = typeBuffer;
+            ListView_InsertItem(m_hCallbacksListView, &lvi);
+            wchar_t addrBuffer[32];
+            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+            char safeModuleName[256];
+            strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
+            safeModuleName[255] = '\0';
+            wchar_t moduleBuffer[256];
+            len = (int)strnlen(safeModuleName, 255);
+            if (len > 0)
+                MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
+            moduleBuffer[len] = L'\0';
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+        }
+    }
 
     CloseHandle(deviceHandle);
 
     // Update the count label
-    wchar_t buffer[32];
-    swprintf_s(buffer, L"Callbacks: %d", ListView_GetItemCount(m_hCallbacksListView));
-    SetWindowText(m_hCallbacksCountLabel, buffer);
+    wchar_t countBuffer[32];
+    swprintf_s(countBuffer, L"Callbacks: %d", ListView_GetItemCount(m_hCallbacksListView));
+    SetWindowText(m_hCallbacksCountLabel, countBuffer);
 }
 
 void MainForm::UpdateRegistryCallbacks() {
     // Clear the list view
     ListView_DeleteAllItems(m_hRegistryCallbacksListView);
 
+    int len = 0;
+
     // Open a handle to the driver
     HANDLE deviceHandle = OpenDriverHandle();
     if (deviceHandle == INVALID_HANDLE_VALUE) {
         return;
     }
 
-    // Enumerate registry callbacks
-    TryEnumerateRegistryCallbacks(deviceHandle);
+    const DWORD bufferSize = sizeof(CALLBACK_INFO_SHARED) * MAX_CALLBACKS_SHARED;
+    std::vector<BYTE> buffer(bufferSize, 0);
+    PCALLBACK_INFO_SHARED callbackInfos = reinterpret_cast<PCALLBACK_INFO_SHARED>(buffer.data());
+    ULONG foundCallbacks = 0;
+
+    if (TryEnumerateRegistryCallbacks(deviceHandle, callbackInfos, MAX_CALLBACKS_SHARED, foundCallbacks)) {
+        for (ULONG i = 0; i < foundCallbacks; i++) {
+            LVITEM lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = ListView_GetItemCount(m_hRegistryCallbacksListView);
+            lvi.iSubItem = 0;
+            wchar_t typeBuffer[32];
+            wcscpy_s(typeBuffer, L"Registry");
+            lvi.pszText = typeBuffer;
+            ListView_InsertItem(m_hRegistryCallbacksListView, &lvi);
+            wchar_t addrBuffer[32];
+            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
+            ListView_SetItemText(m_hRegistryCallbacksListView, lvi.iItem, 1, addrBuffer);
+            char safeModuleName[256];
+            strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
+            safeModuleName[255] = '\0';
+            wchar_t moduleBuffer[256];
+            len = (int)strnlen(safeModuleName, 255);
+            if (len > 0)
+                MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
+            moduleBuffer[len] = L'\0';
+            ListView_SetItemText(m_hRegistryCallbacksListView, lvi.iItem, 2, moduleBuffer);
+        }
+    }
 
     CloseHandle(deviceHandle);
 
     // Update the count label
-    wchar_t buffer[32];
-    swprintf_s(buffer, L"Registry Callbacks: %d", ListView_GetItemCount(m_hRegistryCallbacksListView));
-    SetWindowText(m_hRegistryCallbacksCountLabel, buffer);
+    wchar_t countBuffer[32];
+    swprintf_s(countBuffer, L"Registry Callbacks: %d", ListView_GetItemCount(m_hRegistryCallbacksListView));
+    SetWindowText(m_hRegistryCallbacksCountLabel, countBuffer);
 }
 
 void MainForm::UpdateMinifilterCallbacks() {
     // Clear the list view
     ListView_DeleteAllItems(m_hMinifilterCallbacksListView);
 
-    // Get minifilter callbacks
-    GetDriverMinifilterCallbacks();
+    int len = 0;
+
+    const DWORD bufferSize = sizeof(CALLBACK_INFO_SHARED) * MAX_CALLBACKS_SHARED;
+    std::vector<BYTE> buffer(bufferSize, 0);
+    PCALLBACK_INFO_SHARED callbackInfos = reinterpret_cast<PCALLBACK_INFO_SHARED>(buffer.data());
+    ULONG foundCallbacks = 0;
+
+    if (GetDriverMinifilterCallbacks(callbackInfos, MAX_CALLBACKS_SHARED, foundCallbacks)) {
+        for (ULONG i = 0; i < foundCallbacks; i++) {
+            LVITEM lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = ListView_GetItemCount(m_hMinifilterCallbacksListView);
+            lvi.iSubItem = 0;
+            wchar_t typeBuffer[32];
+            wcscpy_s(typeBuffer, L"Minifilter");
+            lvi.pszText = typeBuffer;
+            ListView_InsertItem(m_hMinifilterCallbacksListView, &lvi);
+            wchar_t addrBuffer[32];
+            swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
+            ListView_SetItemText(m_hMinifilterCallbacksListView, lvi.iItem, 1, addrBuffer);
+            char safeModuleName[256];
+            strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
+            safeModuleName[255] = '\0';
+            wchar_t moduleBuffer[256];
+            len = (int)strnlen(safeModuleName, 255);
+            if (len > 0)
+                MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
+            moduleBuffer[len] = L'\0';
+            ListView_SetItemText(m_hMinifilterCallbacksListView, lvi.iItem, 2, moduleBuffer);
+        }
+    }
 
     // Update the count label
-    wchar_t buffer[32];
-    swprintf_s(buffer, L"Minifilter Callbacks: %d", ListView_GetItemCount(m_hMinifilterCallbacksListView));
-    SetWindowText(m_hMinifilterCallbacksCountLabel, buffer);
+    wchar_t countBuffer[32];
+    swprintf_s(countBuffer, L"Minifilter Callbacks: %d", ListView_GetItemCount(m_hMinifilterCallbacksListView));
+    SetWindowText(m_hMinifilterCallbacksCountLabel, countBuffer);
 }
 
 void MainForm::UpdateSymbols() {

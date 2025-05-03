@@ -11,9 +11,10 @@
 #define IOCTL_ENUMERATE_LOAD_IMAGE CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Maximum number of modules and callbacks
-#define CLIENT_MAX_MODULES 512  // Renamed to avoid conflict
+#define CLIENT_MAX_MODULES 256
 #define MAX_MODULES 64
 #define MAX_CALLBACKS 64
+#define MAX_CALLBACKS_SHARED 64
 #define MAX_PATH 260
 #define MAX_MODULE_NAME 256
 #define MAX_CALLBACK_NAME 256
@@ -68,12 +69,12 @@ typedef struct _KERNEL_READ_REQUEST {
 
 // Define structures for callback enumeration
 typedef enum _CALLBACK_TABLE_TYPE {
-    CallbackTableLoadImage = 0,
+    CallbackTableLoadImage,
     CallbackTableCreateProcess,
     CallbackTableCreateThread,
     CallbackTableRegistry,
-    CallbackTableFilesystem, // Minifilter callbacks
-    CallbackTableMax
+    CallbackTableMinifilter,
+    CallbackTableFilesystem
 } CALLBACK_TABLE_TYPE;
 
 // Minifilter callback types
@@ -137,13 +138,13 @@ typedef enum _MINIFILTER_CALLBACK_TYPE {
     MfPnpPost
 } MINIFILTER_CALLBACK_TYPE;
 
-// Update CALLBACK_INFO_SHARED to match driver definition
+// Callback information structure
 typedef struct _CALLBACK_INFO_SHARED {
-    CALLBACK_TYPE Type;               // Use driver's CALLBACK_TYPE enum
-    PVOID Address;                    // Address of callback
-    ULONG Context;                    // <<< Add missing Context field
-    CHAR CallbackName[MAX_CALLBACK_NAME]; // Use MAX_CALLBACK_NAME (256)
-    CHAR ModuleName[MAX_MODULE_NAME];   // Use MAX_MODULE_NAME (256)
+    CALLBACK_TYPE Type;
+    PVOID Address;
+    ULONG Context;
+    CHAR CallbackName[MAX_CALLBACK_NAME];
+    CHAR ModuleName[MAX_MODULE_NAME];
 } CALLBACK_INFO_SHARED, *PCALLBACK_INFO_SHARED;
 
 // Define user-mode callback information structure

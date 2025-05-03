@@ -23,7 +23,6 @@
 
 // Constants for kernel addresses, offsets, and sizes
 #define MAX_PATH_LENGTH 260
-#define MAX_CALLBACKS_SHARED 256
 #define MAX_CALLBACK_INFO_LENGTH 4096
 
 // Global variables for symbol enumeration callback
@@ -36,6 +35,7 @@ FILE* g_SymbolDumpFile = NULL;
 // Global variables
 HINSTANCE g_hInst;
 MainForm* g_pMainForm;
+HWND g_hWndMain;
 
 // Constants
 #define IDC_DRIVER_MODULES_LISTVIEW 1001
@@ -261,6 +261,7 @@ bool MainForm::Create() {
     wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
 
     if (!RegisterClassEx(&wcex)) {
+        MessageBox(NULL, L"Failed to register window class", L"Error", MB_ICONERROR);
         return false;
     }
 
@@ -279,6 +280,7 @@ bool MainForm::Create() {
     );
 
     if (!m_hWnd) {
+        MessageBox(NULL, L"Failed to create main window", L"Error", MB_ICONERROR);
         return false;
     }
 
@@ -353,8 +355,13 @@ bool MainForm::Create() {
 }
 
 void MainForm::Show(int nCmdShow) {
+    // Show the main window
     ShowWindow(m_hWnd, nCmdShow);
     UpdateWindow(m_hWnd);
+
+    // Show the initial tab's page and refresh button
+    ShowWindow(m_hDriverModulesPage, SW_SHOW);
+    ShowWindow(m_hDriverModulesRefreshButton, SW_SHOW);
 }
 
 void MainForm::Update() {
@@ -376,15 +383,94 @@ LRESULT CALLBACK MainForm::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
         g_pMainForm->ResizeWindow();
         return 0;
 
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_REFRESH_BUTTON) {
+            // Get the current tab
+            int iTab = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
+            
+            // Update the appropriate page based on the current tab
+            switch (iTab) {
+                case 0: // Driver Modules
+                    g_pMainForm->UpdateDriverModules();
+                    break;
+                case 1: // Callbacks
+                    g_pMainForm->UpdateCallbacks();
+                    break;
+                case 2: // Registry Callbacks
+                    g_pMainForm->UpdateRegistryCallbacks();
+                    break;
+                case 3: // Minifilter Callbacks
+                    g_pMainForm->UpdateMinifilterCallbacks();
+                    break;
+                case 4: // Symbols
+                    g_pMainForm->UpdateSymbols();
+                    break;
+            }
+            return 0;
+        }
+        return 0;
+
     case WM_NOTIFY:
         if (((LPNMHDR)lParam)->code == TCN_SELCHANGE) {
             int iTab = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
+            
+            // Show/hide pages
             ShowWindow(g_pMainForm->m_hDriverModulesPage, (iTab == 0) ? SW_SHOW : SW_HIDE);
             ShowWindow(g_pMainForm->m_hCallbacksPage, (iTab == 1) ? SW_SHOW : SW_HIDE);
             ShowWindow(g_pMainForm->m_hRegistryCallbacksPage, (iTab == 2) ? SW_SHOW : SW_HIDE);
             ShowWindow(g_pMainForm->m_hMinifilterCallbacksPage, (iTab == 3) ? SW_SHOW : SW_HIDE);
             ShowWindow(g_pMainForm->m_hSymbolsPage, (iTab == 4) ? SW_SHOW : SW_HIDE);
             ShowWindow(g_pMainForm->m_hAboutPage, (iTab == 5) ? SW_SHOW : SW_HIDE);
+            
+            // Show/hide refresh buttons
+            ShowWindow(g_pMainForm->m_hDriverModulesRefreshButton, (iTab == 0) ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_pMainForm->m_hCallbacksRefreshButton, (iTab == 1) ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_pMainForm->m_hRegistryCallbacksRefreshButton, (iTab == 2) ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_pMainForm->m_hMinifilterCallbacksRefreshButton, (iTab == 3) ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_pMainForm->m_hSymbolsRefreshButton, (iTab == 4) ? SW_SHOW : SW_HIDE);
+
+            // Position the refresh button for the current tab
+            HWND currentPage = NULL;
+            HWND currentButton = NULL;
+            int x = 10;
+            int y = 420;
+            switch (iTab) {
+                case 0:
+                    currentPage = g_pMainForm->m_hDriverModulesPage;
+                    currentButton = g_pMainForm->m_hDriverModulesRefreshButton;
+                    x = 10; y = 420;
+                    break;
+                case 1:
+                    currentPage = g_pMainForm->m_hCallbacksPage;
+                    currentButton = g_pMainForm->m_hCallbacksRefreshButton;
+                    x = 10; y = 420;
+                    break;
+                case 2:
+                    currentPage = g_pMainForm->m_hRegistryCallbacksPage;
+                    currentButton = g_pMainForm->m_hRegistryCallbacksRefreshButton;
+                    x = 10; y = 420;
+                    break;
+                case 3:
+                    currentPage = g_pMainForm->m_hMinifilterCallbacksPage;
+                    currentButton = g_pMainForm->m_hMinifilterCallbacksRefreshButton;
+                    x = 10; y = 420;
+                    break;
+                case 4:
+                    currentPage = g_pMainForm->m_hSymbolsPage;
+                    currentButton = g_pMainForm->m_hSymbolsRefreshButton;
+                    x = 330; y = 420;
+                    break;
+            }
+
+            if (currentPage && currentButton) {
+                RECT pageRect;
+                GetWindowRect(currentPage, &pageRect);
+                MapWindowPoints(HWND_DESKTOP, hWnd, (LPPOINT)&pageRect, 2);
+                SetWindowPos(currentButton, NULL,
+                    pageRect.left + x, pageRect.top + y,
+                    100, 30,
+                    SWP_NOZORDER);
+            }
         }
         return 0;
 

@@ -6,21 +6,23 @@ const char* DRIVER_NAME = "\\\\.\\Elemetry"; // NT device path for our driver
 
 // Function to open a handle to the driver device
 HANDLE OpenDriverHandle() {
-    HANDLE deviceHandle = CreateFileA(
-        DRIVER_NAME,
+    HANDLE hDevice = CreateFile(
+        L"\\\\.\\elemetry",
         GENERIC_READ | GENERIC_WRITE,
         0,
-        nullptr,
+        NULL,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
-        nullptr
+        NULL
     );
 
-    if (deviceHandle == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open device handle. Error code: " << GetLastError() << std::endl;
-        return INVALID_HANDLE_VALUE;
+    if (hDevice == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        wchar_t errorMsg[256];
+        swprintf_s(errorMsg, L"CreateFile failed with error: %d", error);
+        MessageBox(NULL, errorMsg, L"Error", MB_ICONERROR);
     }
 
-    return deviceHandle;
+    return hDevice;
 }
 
