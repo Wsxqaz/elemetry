@@ -18,6 +18,7 @@
 #include "Common.h"    // Project common definitions
 #include "callbacks.h" // Function prototypes
 #include "memory.h"    // Memory read/write functions
+#include "modules.h"  // Module enumeration functions
 
 // Include other headers in proper order
 #include <wdm.h>       // Windows Driver Model
@@ -32,237 +33,6 @@
 #ifndef POOL_FLAG_ZERO_ALLOCATION
 #define POOL_FLAG_ZERO_ALLOCATION 0x0000000000000100ULL
 #endif
-
-// Global callback tracking array - using the shared struct
-CALLBACK_INFO_SHARED g_CallbackInfo[MAX_CALLBACKS_SHARED];
-ULONG g_CallbackCount = 0;
-
-// Define the number of hardcoded modules we are looking for
-#define INITIAL_MODULE_BUFFER_SIZE 1024  // Initial buffer size for module enumeration
-
-// Keep const for logic, but use define for array sizes
-const ULONG g_ModuleCountMax = INITIAL_MODULE_BUFFER_SIZE;
-MODULE_INFO* g_FoundModules = NULL;
-ULONG g_ModuleCount = 0;
-BOOLEAN g_ModulesInitialized = FALSE;
-
-
-// Define static buffers
-#define MODULE_INFO_BUFFER_SIZE 2144  // Size needed for output modules
-#define SYSTEM_MODULE_BUFFER_SIZE 96000  // Size needed for system module info (increased from 47368)
-
-// Function pointers that may not be available in older Windows versions
-
-
-NTSTATUS GetDynamicModules(
-    _Out_writes_bytes_opt_(OutputBufferLength) PMODULE_INFO OutputBuffer,
-    _In_ ULONG OutputBufferLength,
-    _Out_ PULONG BytesWrittenOrRequired
-)
-{
-    NTSTATUS status = STATUS_SUCCESS;
-    ULONG foundCount = 0;
-
-    // Check if we're at PASSIVE_LEVEL
-    KIRQL CurrentIrql = KeGetCurrentIrql();
-    if (CurrentIrql > PASSIVE_LEVEL) {
-        DbgPrint("[elemetry] GetDynamicModules: Running at IRQL %d, need PASSIVE_LEVEL\n", CurrentIrql);
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    if (!OutputBuffer) {
-        DbgPrint("[elemetry] GetDynamicModules: Invalid output buffer pointer.\n");
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    __try {
-        // Initialize AuxKlib for additional module information
-        status = AuxKlibInitialize();
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] GetDynamicModules: Failed to initialize AuxKlib: 0x%X\n", status);
-            // Continue with ZwQuerySystemInformation as fallback
-        }
-
-        // First try with ZwQuerySystemInformation
-        ULONG SystemInfoLength = SYSTEM_MODULE_BUFFER_SIZE;
-        status = ZwQuerySystemInformation(SystemModuleInformation, NULL, 0, &SystemInfoLength);
-        if (status != STATUS_INFO_LENGTH_MISMATCH) {
-            DbgPrint("[elemetry] GetDynamicModules: Failed to get required size: 0x%X\n", status);
-            return status;
-        }
-
-        // Allocate buffer for module information
-        PSYSTEM_MODULE_INFORMATION ModuleInfo = (PSYSTEM_MODULE_INFORMATION)ExAllocatePool2(
-            POOL_FLAG_NON_PAGED,
-            SystemInfoLength,
-            DRIVER_TAG
-        );
-
-        if (!ModuleInfo) {
-            DbgPrint("[elemetry] GetDynamicModules: Failed to allocate module info buffer\n");
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        // Get actual module information
-        status = ZwQuerySystemInformation(SystemModuleInformation, ModuleInfo, SystemInfoLength, &SystemInfoLength);
-        if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] GetDynamicModules: Failed to get module information: 0x%X\n", status);
-            ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
-            return status;
-        }
-
-        // Allocate or reallocate internal storage if needed
-        if (!g_FoundModules) {
-            g_FoundModules = (PMODULE_INFO)ExAllocatePool2(
-                POOL_FLAG_NON_PAGED,
-                ModuleInfo->Count * sizeof(MODULE_INFO),
-                DRIVER_TAG
-            );
-            if (!g_FoundModules) {
-                DbgPrint("[elemetry] GetDynamicModules: Failed to allocate internal storage\n");
-                ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
-                return STATUS_INSUFFICIENT_RESOURCES;
-            }
-        } else if (g_ModuleCount < ModuleInfo->Count) {
-            ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
-            g_FoundModules = (PMODULE_INFO)ExAllocatePool2(
-                POOL_FLAG_NON_PAGED,
-                ModuleInfo->Count * sizeof(MODULE_INFO),
-                DRIVER_TAG
-            );
-            if (!g_FoundModules) {
-                DbgPrint("[elemetry] GetDynamicModules: Failed to reallocate internal storage\n");
-                ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
-                return STATUS_INSUFFICIENT_RESOURCES;
-            }
-        }
-
-        // Zero out the internal storage before populating
-        RtlZeroMemory(g_FoundModules, ModuleInfo->Count * sizeof(MODULE_INFO));
-
-        // Process each module from ZwQuerySystemInformation
-        for (ULONG i = 0; i < ModuleInfo->Count; i++) {
-            // Skip modules with NULL base address
-            if (ModuleInfo->Modules[i].ImageBase == NULL) {
-                continue;
-            }
-
-            // Store module information
-            g_FoundModules[foundCount].BaseAddress = ModuleInfo->Modules[i].ImageBase;
-            g_FoundModules[foundCount].Size = ModuleInfo->Modules[i].ImageSize;
-            g_FoundModules[foundCount].Flags = 0;
-
-            // Convert module name from ANSI to Unicode
-            ANSI_STRING ansiName;
-            UNICODE_STRING unicodeName;
-            RtlInitAnsiString(&ansiName, ModuleInfo->Modules[i].ImageName);
-            RtlAnsiStringToUnicodeString(&unicodeName, &ansiName, TRUE);
-
-            // Copy the module path
-            wcscpy_s(g_FoundModules[foundCount].Path, MAX_PATH, unicodeName.Buffer);
-            RtlFreeUnicodeString(&unicodeName);
-
-            // Copy to output buffer if provided and there's space
-            if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
-                RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[foundCount], sizeof(MODULE_INFO));
-            }
-
-            foundCount++;
-        }
-
-        // Now try with AuxKlib for additional modules
-        if (NT_SUCCESS(AuxKlibInitialize())) {
-            ULONG AuxModulesBufferSize = 0;
-            status = AuxKlibQueryModuleInformation(&AuxModulesBufferSize, sizeof(AUX_MODULE_EXTENDED_INFO), nullptr);
-            if (NT_SUCCESS(status) && AuxModulesBufferSize > 0) {
-                PAUX_MODULE_EXTENDED_INFO AuxModuleInfo = (PAUX_MODULE_EXTENDED_INFO)ExAllocatePool2(
-                    POOL_FLAG_NON_PAGED,
-                    AuxModulesBufferSize,
-                    DRIVER_TAG
-                );
-
-                if (AuxModuleInfo) {
-                    status = AuxKlibQueryModuleInformation(&AuxModulesBufferSize, sizeof(AUX_MODULE_EXTENDED_INFO), AuxModuleInfo);
-                    if (NT_SUCCESS(status)) {
-                        ULONG AuxModuleCount = AuxModulesBufferSize / sizeof(AUX_MODULE_EXTENDED_INFO);
-
-                        // Check for modules not found in the first enumeration
-                        for (ULONG i = 0; i < AuxModuleCount; i++) {
-                            BOOLEAN alreadyFound = FALSE;
-
-                            // Check if this module was already found
-                            for (ULONG j = 0; j < foundCount; j++) {
-                                if (g_FoundModules[j].BaseAddress == AuxModuleInfo[i].BasicInfo.ImageBase) {
-                                    alreadyFound = TRUE;
-                                    break;
-                                }
-                            }
-
-                            if (!alreadyFound) {
-                                // Reallocate internal storage if needed
-                                if (foundCount >= g_ModuleCount) {
-                                    PMODULE_INFO newModules = (PMODULE_INFO)ExAllocatePool2(
-                                        POOL_FLAG_NON_PAGED,
-                                        (foundCount + 1) * sizeof(MODULE_INFO),
-                                        DRIVER_TAG
-                                    );
-                                    if (!newModules) {
-                                        DbgPrint("[elemetry] GetDynamicModules: Failed to reallocate for additional modules\n");
-                                        break;
-                                    }
-
-                                    RtlCopyMemory(newModules, g_FoundModules, foundCount * sizeof(MODULE_INFO));
-                                    ExFreePoolWithTag(g_FoundModules, DRIVER_TAG);
-                                    g_FoundModules = newModules;
-                                    g_ModuleCount = foundCount + 1;
-                                }
-
-                                // Store the new module
-                                g_FoundModules[foundCount].BaseAddress = AuxModuleInfo[i].BasicInfo.ImageBase;
-                                g_FoundModules[foundCount].Size = AuxModuleInfo[i].ImageSize;
-                                g_FoundModules[foundCount].Flags = 0;
-
-                                // Convert and copy the module path
-                                ANSI_STRING ansiName;
-                                UNICODE_STRING unicodeName;
-                                RtlInitAnsiString(&ansiName, (PCSZ)AuxModuleInfo[i].FullPathName);
-                                RtlAnsiStringToUnicodeString(&unicodeName, &ansiName, TRUE);
-                                wcscpy_s(g_FoundModules[foundCount].Path, MAX_PATH, unicodeName.Buffer);
-                                RtlFreeUnicodeString(&unicodeName);
-
-                                // Copy to output buffer if provided and there's space
-                                if (OutputBuffer && (foundCount * sizeof(MODULE_INFO)) < OutputBufferLength) {
-                                    RtlCopyMemory(&OutputBuffer[foundCount], &g_FoundModules[foundCount], sizeof(MODULE_INFO));
-                                }
-
-                                foundCount++;
-                            }
-                        }
-                    }
-
-                    ExFreePoolWithTag(AuxModuleInfo, DRIVER_TAG);
-                }
-            }
-        }
-
-        // Update module count
-        g_ModuleCount = foundCount;
-
-        // Mark modules as initialized
-        g_ModulesInitialized = TRUE;
-
-        // Report how many were found
-        DbgPrint("[elemetry] GetDynamicModules: Found %lu modules\n", foundCount);
-
-        *BytesWrittenOrRequired = foundCount * sizeof(MODULE_INFO);
-        ExFreePoolWithTag(ModuleInfo, DRIVER_TAG);
-        return STATUS_SUCCESS;
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrint("[elemetry] GetDynamicModules: Exception during module enumeration\n");
-        return STATUS_UNSUCCESSFUL;
-    }
-}
 
 // --- IOCTL Handler for GetModules ---
 NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
@@ -297,8 +67,6 @@ NTSTATUS HandleGetModulesIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return Status;
 }
-
-
 
 // --- IOCTL Handler for LoadImageCallbacks ---
 extern "C" NTSTATUS HandleEnumerateLoadImageCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_LOCATION Stack)
@@ -429,38 +197,15 @@ extern "C" NTSTATUS HandleEnumerateCallbacksIOCTL(_In_ PIRP Irp, _In_ PIO_STACK_
     // Verify the callback table address is valid - skip for filesystem callbacks
     BOOLEAN validTable = FALSE;
     if (request->Type != CallbackTableFilesystem) {
+        // Verify the callback table address is valid
         UCHAR checkBuffer[16] = {0}; // Read a small amount to validate the address
         SIZE_T bytesRead = 0;
+        status = TestReadAddress(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
 
-        // First try normal access
-        DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Testing memory at %p with normal read\n",
-                 request->TableAddress);
-
-        // Check if the IRP has been cancelled
-        if (Irp->Cancel) {
-            DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled during table validation\n");
-            status = STATUS_CANCELLED;
-            goto Exit;
-        }
-
-        // Test read to make sure we can access the memory
-        status = ReadKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
         if (!NT_SUCCESS(status)) {
-            DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Normal read failed (0x%X), trying protected read\n", status);
-
-            // Check if the IRP has been cancelled
-            if (Irp->Cancel) {
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: IRP cancelled during table validation\n");
-                status = STATUS_CANCELLED;
-                goto Exit;
-            }
-
-            status = ReadProtectedKernelMemory(request->TableAddress, checkBuffer, sizeof(checkBuffer), &bytesRead);
-            if (!NT_SUCCESS(status)) {
-                DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Protected read also failed (0x%X)\n", status);
-                status = STATUS_INVALID_PARAMETER;
-                goto Exit;
-            }
+            DbgPrint("[elemetry] HandleEnumerateCallbacksIOCTL: Protected read also failed (0x%X)\n", status);
+            status = STATUS_INVALID_PARAMETER;
+            goto Exit;
         }
 
         validTable = TRUE;

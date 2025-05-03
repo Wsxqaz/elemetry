@@ -496,7 +496,7 @@ NTSTATUS EnumerateRegistryCallbacks(
            visitedCount < ARRAYSIZE(visitedEntries)) {
 
         // Periodically check if the IRP has been cancelled (every 10 entries)
-        if ((visitedCount % 10) == 0 && currentIrp && currentIrp->Cancel) {
+        if ((visitedCount % 10) == 0) {
             DbgPrint("[elemetry] EnumerateRegistryCallbacks: IRP cancelled during enumeration at entry %d\n",
                      visitedCount);
             *FoundCallbacks = count; // Return what we have so far

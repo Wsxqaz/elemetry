@@ -115,11 +115,13 @@
     <ClCompile Include="callbacks.cpp" />
     <ClCompile Include="enumerators.cpp" />
     <ClCompile Include="memory.cpp" />
+    <ClCompile Include="modules.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="callbacks.h" />
     <ClInclude Include="enumerators.h" />
     <ClInclude Include="memory.h" />
+    <ClCompile Include="modules.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
