@@ -11,6 +11,7 @@
 #define IOCTL_ENUMERATE_LOAD_IMAGE CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Maximum number of modules and callbacks
+#define CLIENT_MAX_MODULES 512  // Renamed to avoid conflict
 #define MAX_MODULES 64
 #define MAX_CALLBACKS 64
 #define MAX_PATH 260
@@ -174,3 +175,4 @@ typedef struct _CALLBACK_ENUM_REQUEST {
     ULONG FoundCallbacks;             // Number of callbacks found
     CALLBACK_INFO_SHARED Callbacks[1]; // Variable-sized array using CORRECT definition
 } CALLBACK_ENUM_REQUEST, *PCALLBACK_ENUM_REQUEST;
+

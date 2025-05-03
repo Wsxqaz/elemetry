@@ -164,15 +164,19 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="elemetryClient.cpp" />
-    <ClCompile Include="utils\utils.cpp" />
-    <ClCompile Include="symbols\symbols.cpp" />
-    <ClCompile Include="callbacks\callbacks.cpp" />
+    <ClCompile Include="symbols.cpp" />
+    <ClCompile Include="utils.cpp" />
+    <ClCompile Include="driver.cpp" />
+    <ClCompile Include="pages.cpp" />
+    <ClCompile Include="enumerators.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="elemetry.h" />
-    <ClInclude Include="utils\utils.h" />
-    <ClInclude Include="symbols\symbols.h" />
-    <ClInclude Include="callbacks\callbacks.h" />
+    <ClInclude Include="symbols.h" />
+    <ClInclude Include="utils.h" />
+    <ClInclude Include="driver.h" />
+    <ClInclude Include="elemetryClient.h" />
+    <ClInclude Include="enumerators.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
@@ -181,4 +185,4 @@
     <Message Text="Copying symsrv.dll to output directory" Importance="high" />
     <Exec Command="if exist &quot;$(WindowsSdkDir)Debuggers\$(PlatformTarget)\symsrv.dll&quot; copy &quot;$(WindowsSdkDir)Debuggers\$(PlatformTarget)\symsrv.dll&quot; &quot;$(OutDir)&quot; /Y" />
   </Target>
-</Project> 
+</Project>
