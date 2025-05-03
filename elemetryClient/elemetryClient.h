@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 #include "elemetry.h"
-#include "symbols.h"
 #include "utils.h"
 #include "driver.h"
 
@@ -14,10 +13,7 @@
 #define IDC_CALLBACKS_LISTVIEW 1002
 #define IDC_REGISTRY_CALLBACKS_LISTVIEW 1003
 #define IDC_MINIFILTER_CALLBACKS_LISTVIEW 1004
-#define IDC_SYMBOLS_LISTVIEW 1005
 #define IDC_REFRESH_BUTTON 2001
-#define IDC_SEARCH_BUTTON 2002
-#define IDC_SEARCH_EDIT 2003
 
 // Forward declarations
 class MainForm;
@@ -46,7 +42,6 @@ public:
     HWND m_hCallbacksPage;
     HWND m_hRegistryCallbacksPage;
     HWND m_hMinifilterCallbacksPage;
-    HWND m_hSymbolsPage;
     HWND m_hAboutPage;
 
     // Driver Modules page controls
@@ -69,13 +64,6 @@ public:
     HWND m_hMinifilterCallbacksRefreshButton;
     HWND m_hMinifilterCallbacksCountLabel;
 
-    // Symbols page controls
-    HWND m_hSymbolsListView;
-    HWND m_hSymbolsRefreshButton;
-    HWND m_hSymbolsCountLabel;
-    HWND m_hSymbolsSearchEdit;
-    HWND m_hSymbolsSearchButton;
-
     // About page controls
     HWND m_hAboutLabel;
 
@@ -84,20 +72,17 @@ private:
     void CreateCallbacksPage();
     void CreateRegistryCallbacksPage();
     void CreateMinifilterCallbacksPage();
-    void CreateSymbolsPage();
     void CreateAboutPage();
     void ResizeWindow();
     void UpdateDriverModules();
     void UpdateCallbacks();
     void UpdateRegistryCallbacks();
     void UpdateMinifilterCallbacks();
-    void UpdateSymbols();
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK DriverModulesWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK CallbacksWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK RegistryCallbacksWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK MinifilterCallbacksWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK SymbolsWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK AboutWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 }; 

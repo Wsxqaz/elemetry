@@ -1,6 +1,16 @@
+#include <Windows.h>
+#include <commctrl.h>
+#include <string>
+#include <vector>
+#include <iostream>
+#include "pages.h"
 #include "elemetryClient.h"
+#include "elemetry.h"
+#include "utils.h"
+#include "driver.h"
 #include <strsafe.h>
 #include "enumerators.h"
+#include "symbols.h"
 
 // Helper function to create a list view
 HWND CreateListView(HWND hWndParent, int x, int y, int width, int height, DWORD id) {
@@ -32,6 +42,40 @@ void AddListViewColumn(HWND hWndListView, int index, const wchar_t* text, int wi
     lvc.cx = width;
     lvc.pszText = (LPWSTR)text;
     ListView_InsertColumn(hWndListView, index, &lvc);
+}
+
+// Helper function to get driver modules
+std::vector<MODULE_INFO> GetDriverModules(HANDLE deviceHandle, DWORD& moduleCount) {
+    moduleCount = 0;
+    const DWORD maxModules = 1024;  // Reasonable maximum
+    std::vector<MODULE_INFO> moduleInfos(maxModules);
+
+    DWORD bytesReturned = 0;
+    BOOL success = DeviceIoControl(
+        deviceHandle,
+        IOCTL_GET_MODULES,
+        nullptr, 0,
+        moduleInfos.data(), sizeof(MODULE_INFO) * maxModules,
+        &bytesReturned,
+        nullptr
+    );
+
+    if (success && bytesReturned > 0) {
+        moduleCount = bytesReturned / sizeof(MODULE_INFO);
+        moduleInfos.resize(moduleCount);
+        return moduleInfos;
+    }
+
+    return std::vector<MODULE_INFO>();
+}
+
+// Helper function to get filename from path
+const wchar_t* GetFileNameFromPath(const wchar_t* path) {
+    const wchar_t* fileName = wcsrchr(path, L'\\');
+    if (fileName) {
+        return fileName + 1;  // Skip the backslash
+    }
+    return path;  // Return full path if no backslash found
 }
 
 void MainForm::CreateDriverModulesPage() {
@@ -74,7 +118,7 @@ void MainForm::CreateDriverModulesPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hWnd,  // Parent is main window instead of page
+        m_hWnd,  // Keep parent as main window
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
@@ -85,12 +129,15 @@ void MainForm::CreateDriverModulesPage() {
         return;
     }
 
-    // Set button position relative to page
+    // Position the button relative to the page
     RECT pageRect;
     GetWindowRect(m_hDriverModulesPage, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    RECT mainRect;
+    GetWindowRect(m_hWnd, &mainRect);
+    POINT pt = { pageRect.left, pageRect.top };
+    ScreenToClient(m_hWnd, &pt);
     SetWindowPos(m_hDriverModulesRefreshButton, NULL,
-        pageRect.left + 10, pageRect.top + 420,
+        pt.x + 10, pt.y + 420,
         100, 30,
         SWP_NOZORDER);
 
@@ -143,18 +190,21 @@ void MainForm::CreateCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hWnd,  // Parent is main window instead of page
+        m_hWnd,  // Keep parent as main window
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
 
-    // Set button position relative to page
+    // Position the button relative to the page
     RECT pageRect;
     GetWindowRect(m_hCallbacksPage, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    RECT mainRect;
+    GetWindowRect(m_hWnd, &mainRect);
+    POINT pt = { pageRect.left, pageRect.top };
+    ScreenToClient(m_hWnd, &pt);
     SetWindowPos(m_hCallbacksRefreshButton, NULL,
-        pageRect.left + 10, pageRect.top + 420,
+        pt.x + 10, pt.y + 420,
         100, 30,
         SWP_NOZORDER);
 
@@ -202,18 +252,21 @@ void MainForm::CreateRegistryCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hWnd,  // Parent is main window instead of page
+        m_hWnd,  // Keep parent as main window
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
 
-    // Set button position relative to page
+    // Position the button relative to the page
     RECT pageRect;
     GetWindowRect(m_hRegistryCallbacksPage, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    RECT mainRect;
+    GetWindowRect(m_hWnd, &mainRect);
+    POINT pt = { pageRect.left, pageRect.top };
+    ScreenToClient(m_hWnd, &pt);
     SetWindowPos(m_hRegistryCallbacksRefreshButton, NULL,
-        pageRect.left + 10, pageRect.top + 420,
+        pt.x + 10, pt.y + 420,
         100, 30,
         SWP_NOZORDER);
 
@@ -261,18 +314,21 @@ void MainForm::CreateMinifilterCallbacksPage() {
         L"Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 420, 100, 30,
-        m_hWnd,  // Parent is main window instead of page
+        m_hWnd,  // Keep parent as main window
         (HMENU)IDC_REFRESH_BUTTON,
         g_hInst,
         NULL
     );
 
-    // Set button position relative to page
+    // Position the button relative to the page
     RECT pageRect;
     GetWindowRect(m_hMinifilterCallbacksPage, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
+    RECT mainRect;
+    GetWindowRect(m_hWnd, &mainRect);
+    POINT pt = { pageRect.left, pageRect.top };
+    ScreenToClient(m_hWnd, &pt);
     SetWindowPos(m_hMinifilterCallbacksRefreshButton, NULL,
-        pageRect.left + 10, pageRect.top + 420,
+        pt.x + 10, pt.y + 420,
         100, 30,
         SWP_NOZORDER);
 
@@ -284,90 +340,6 @@ void MainForm::CreateMinifilterCallbacksPage() {
         WS_CHILD | WS_VISIBLE,
         120, 425, 200, 20,
         m_hMinifilterCallbacksPage,
-        NULL,
-        g_hInst,
-        NULL
-    );
-}
-
-void MainForm::CreateSymbolsPage() {
-    // Create the page window
-    m_hSymbolsPage = CreateWindowEx(
-        0,
-        L"STATIC",
-        NULL,
-        WS_CHILD | WS_VISIBLE,
-        0, 0, 0, 0,
-        m_hWnd,
-        NULL,
-        g_hInst,
-        NULL
-    );
-
-    // Create the list view
-    m_hSymbolsListView = CreateListView(m_hSymbolsPage, 10, 10, 860, 400, IDC_SYMBOLS_LISTVIEW);
-
-    // Add columns
-    AddListViewColumn(m_hSymbolsListView, 0, L"Symbol Name", 300);
-    AddListViewColumn(m_hSymbolsListView, 1, L"Address", 100);
-    AddListViewColumn(m_hSymbolsListView, 2, L"Module", 200);
-
-    // Create the search edit control
-    m_hSymbolsSearchEdit = CreateWindowEx(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        NULL,
-        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        10, 420, 200, 30,
-        m_hSymbolsPage,
-        (HMENU)IDC_SEARCH_EDIT,
-        g_hInst,
-        NULL
-    );
-
-    // Create the search button
-    m_hSymbolsSearchButton = CreateWindowEx(
-        0,
-        L"BUTTON",
-        L"Search",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        220, 420, 100, 30,
-        m_hSymbolsPage,
-        (HMENU)IDC_SEARCH_BUTTON,
-        g_hInst,
-        NULL
-    );
-
-    // Create the refresh button
-    m_hSymbolsRefreshButton = CreateWindowEx(
-        0,
-        L"BUTTON",
-        L"Refresh",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        330, 420, 100, 30,
-        m_hWnd,  // Parent is main window instead of page
-        (HMENU)IDC_REFRESH_BUTTON,
-        g_hInst,
-        NULL
-    );
-
-    // Set button position relative to page
-    RECT pageRect;
-    GetWindowRect(m_hSymbolsPage, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, m_hWnd, (LPPOINT)&pageRect, 2);
-    SetWindowPos(m_hSymbolsRefreshButton, NULL,
-        pageRect.left + 330, pageRect.top + 420,
-        100, 30,
-        SWP_NOZORDER);
-
-    // Create the count label
-    m_hSymbolsCountLabel = CreateWindowEx(
-        0,
-        L"STATIC",
-        L"Symbols: 0",
-        WS_CHILD | WS_VISIBLE,
-        440, 425, 200, 20,
-        m_hSymbolsPage,
         NULL,
         g_hInst,
         NULL
@@ -449,14 +421,34 @@ void MainForm::ResizeWindow() {
         rcTab.right - rcTab.left, rcTab.bottom - rcTab.top,
         SWP_NOZORDER);
 
-    SetWindowPos(m_hSymbolsPage, NULL,
+    SetWindowPos(m_hAboutPage, NULL,
         rcTab.left, rcTab.top,
         rcTab.right - rcTab.left, rcTab.bottom - rcTab.top,
         SWP_NOZORDER);
 
-    SetWindowPos(m_hAboutPage, NULL,
-        rcTab.left, rcTab.top,
-        rcTab.right - rcTab.left, rcTab.bottom - rcTab.top,
+    // Update refresh button positions
+    POINT pt = { rcTab.left, rcTab.top };
+    ClientToScreen(m_hWnd, &pt);
+    ScreenToClient(m_hWnd, &pt);
+
+    SetWindowPos(m_hDriverModulesRefreshButton, NULL,
+        pt.x + 10, pt.y + 420,
+        100, 30,
+        SWP_NOZORDER);
+
+    SetWindowPos(m_hCallbacksRefreshButton, NULL,
+        pt.x + 10, pt.y + 420,
+        100, 30,
+        SWP_NOZORDER);
+
+    SetWindowPos(m_hRegistryCallbacksRefreshButton, NULL,
+        pt.x + 10, pt.y + 420,
+        100, 30,
+        SWP_NOZORDER);
+
+    SetWindowPos(m_hMinifilterCallbacksRefreshButton, NULL,
+        pt.x + 10, pt.y + 420,
+        100, 30,
         SWP_NOZORDER);
 
     // Center the about label
@@ -571,18 +563,43 @@ void MainForm::UpdateCallbacks() {
             wcscpy_s(typeBuffer, L"Load Image");
             lvi.pszText = typeBuffer;
             ListView_InsertItem(m_hCallbacksListView, &lvi);
+
+            // Address
             wchar_t addrBuffer[32];
             swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+
+            // Module name
             char safeModuleName[256];
             strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
             safeModuleName[255] = '\0';
             wchar_t moduleBuffer[256];
-            int len = (int)strnlen(safeModuleName, 255);
+            len = (int)strnlen(safeModuleName, 255);
             if (len > 0)
                 MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
             moduleBuffer[len] = L'\0';
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+
+            // Get module base address
+            DWORD moduleCount = 0;
+            std::vector<MODULE_INFO> moduleInfos = GetDriverModules(deviceHandle, moduleCount);
+            ULONG_PTR moduleBase = 0;
+            for (DWORD j = 0; j < moduleCount; j++) {
+                const wchar_t* fileName = GetFileNameFromPath(moduleInfos[j].Path);
+                if (_wcsicmp(moduleBuffer, fileName) == 0) {
+                    moduleBase = (ULONG_PTR)moduleInfos[j].BaseAddress;
+                    break;
+                }
+            }
+
+            // Calculate and display offset
+            wchar_t offsetBuffer[32];
+            if (moduleBase != 0) {
+                swprintf_s(offsetBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address - moduleBase);
+            } else {
+                wcscpy_s(offsetBuffer, L"N/A");
+            }
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 3, offsetBuffer);
         }
     }
 
@@ -597,9 +614,13 @@ void MainForm::UpdateCallbacks() {
             wcscpy_s(typeBuffer, L"Process Creation");
             lvi.pszText = typeBuffer;
             ListView_InsertItem(m_hCallbacksListView, &lvi);
+
+            // Address
             wchar_t addrBuffer[32];
             swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+
+            // Module name
             char safeModuleName[256];
             strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
             safeModuleName[255] = '\0';
@@ -609,6 +630,27 @@ void MainForm::UpdateCallbacks() {
                 MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
             moduleBuffer[len] = L'\0';
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+
+            // Get module base address
+            DWORD moduleCount = 0;
+            std::vector<MODULE_INFO> moduleInfos = GetDriverModules(deviceHandle, moduleCount);
+            ULONG_PTR moduleBase = 0;
+            for (DWORD j = 0; j < moduleCount; j++) {
+                const wchar_t* fileName = GetFileNameFromPath(moduleInfos[j].Path);
+                if (_wcsicmp(moduleBuffer, fileName) == 0) {
+                    moduleBase = (ULONG_PTR)moduleInfos[j].BaseAddress;
+                    break;
+                }
+            }
+
+            // Calculate and display offset
+            wchar_t offsetBuffer[32];
+            if (moduleBase != 0) {
+                swprintf_s(offsetBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address - moduleBase);
+            } else {
+                wcscpy_s(offsetBuffer, L"N/A");
+            }
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 3, offsetBuffer);
         }
     }
 
@@ -623,9 +665,13 @@ void MainForm::UpdateCallbacks() {
             wcscpy_s(typeBuffer, L"Thread Creation");
             lvi.pszText = typeBuffer;
             ListView_InsertItem(m_hCallbacksListView, &lvi);
+
+            // Address
             wchar_t addrBuffer[32];
             swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 1, addrBuffer);
+
+            // Module name
             char safeModuleName[256];
             strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
             safeModuleName[255] = '\0';
@@ -635,6 +681,27 @@ void MainForm::UpdateCallbacks() {
                 MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
             moduleBuffer[len] = L'\0';
             ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 2, moduleBuffer);
+
+            // Get module base address
+            DWORD moduleCount = 0;
+            std::vector<MODULE_INFO> moduleInfos = GetDriverModules(deviceHandle, moduleCount);
+            ULONG_PTR moduleBase = 0;
+            for (DWORD j = 0; j < moduleCount; j++) {
+                const wchar_t* fileName = GetFileNameFromPath(moduleInfos[j].Path);
+                if (_wcsicmp(moduleBuffer, fileName) == 0) {
+                    moduleBase = (ULONG_PTR)moduleInfos[j].BaseAddress;
+                    break;
+                }
+            }
+
+            // Calculate and display offset
+            wchar_t offsetBuffer[32];
+            if (moduleBase != 0) {
+                swprintf_s(offsetBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address - moduleBase);
+            } else {
+                wcscpy_s(offsetBuffer, L"N/A");
+            }
+            ListView_SetItemText(m_hCallbacksListView, lvi.iItem, 3, offsetBuffer);
         }
     }
 
@@ -673,9 +740,13 @@ void MainForm::UpdateRegistryCallbacks() {
             wcscpy_s(typeBuffer, L"Registry");
             lvi.pszText = typeBuffer;
             ListView_InsertItem(m_hRegistryCallbacksListView, &lvi);
+
+            // Address
             wchar_t addrBuffer[32];
             swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
             ListView_SetItemText(m_hRegistryCallbacksListView, lvi.iItem, 1, addrBuffer);
+
+            // Module name
             char safeModuleName[256];
             strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
             safeModuleName[255] = '\0';
@@ -685,6 +756,27 @@ void MainForm::UpdateRegistryCallbacks() {
                 MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
             moduleBuffer[len] = L'\0';
             ListView_SetItemText(m_hRegistryCallbacksListView, lvi.iItem, 2, moduleBuffer);
+
+            // Get module base address
+            DWORD moduleCount = 0;
+            std::vector<MODULE_INFO> moduleInfos = GetDriverModules(deviceHandle, moduleCount);
+            ULONG_PTR moduleBase = 0;
+            for (DWORD j = 0; j < moduleCount; j++) {
+                const wchar_t* fileName = GetFileNameFromPath(moduleInfos[j].Path);
+                if (_wcsicmp(moduleBuffer, fileName) == 0) {
+                    moduleBase = (ULONG_PTR)moduleInfos[j].BaseAddress;
+                    break;
+                }
+            }
+
+            // Calculate and display offset
+            wchar_t offsetBuffer[32];
+            if (moduleBase != 0) {
+                swprintf_s(offsetBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address - moduleBase);
+            } else {
+                wcscpy_s(offsetBuffer, L"N/A");
+            }
+            ListView_SetItemText(m_hRegistryCallbacksListView, lvi.iItem, 3, offsetBuffer);
         }
     }
 
@@ -702,6 +794,12 @@ void MainForm::UpdateMinifilterCallbacks() {
 
     int len = 0;
 
+    // Open a handle to the driver
+    HANDLE deviceHandle = OpenDriverHandle();
+    if (deviceHandle == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
     const DWORD bufferSize = sizeof(CALLBACK_INFO_SHARED) * MAX_CALLBACKS_SHARED;
     std::vector<BYTE> buffer(bufferSize, 0);
     PCALLBACK_INFO_SHARED callbackInfos = reinterpret_cast<PCALLBACK_INFO_SHARED>(buffer.data());
@@ -717,9 +815,13 @@ void MainForm::UpdateMinifilterCallbacks() {
             wcscpy_s(typeBuffer, L"Minifilter");
             lvi.pszText = typeBuffer;
             ListView_InsertItem(m_hMinifilterCallbacksListView, &lvi);
+
+            // Address
             wchar_t addrBuffer[32];
             swprintf_s(addrBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address);
             ListView_SetItemText(m_hMinifilterCallbacksListView, lvi.iItem, 1, addrBuffer);
+
+            // Module name
             char safeModuleName[256];
             strncpy(safeModuleName, callbackInfos[i].ModuleName, 255);
             safeModuleName[255] = '\0';
@@ -729,32 +831,34 @@ void MainForm::UpdateMinifilterCallbacks() {
                 MultiByteToWideChar(CP_ACP, 0, safeModuleName, len, moduleBuffer, 256);
             moduleBuffer[len] = L'\0';
             ListView_SetItemText(m_hMinifilterCallbacksListView, lvi.iItem, 2, moduleBuffer);
+
+            // Get module base address
+            DWORD moduleCount = 0;
+            std::vector<MODULE_INFO> moduleInfos = GetDriverModules(deviceHandle, moduleCount);
+            ULONG_PTR moduleBase = 0;
+            for (DWORD j = 0; j < moduleCount; j++) {
+                const wchar_t* fileName = GetFileNameFromPath(moduleInfos[j].Path);
+                if (_wcsicmp(moduleBuffer, fileName) == 0) {
+                    moduleBase = (ULONG_PTR)moduleInfos[j].BaseAddress;
+                    break;
+                }
+            }
+
+            // Calculate and display offset
+            wchar_t offsetBuffer[32];
+            if (moduleBase != 0) {
+                swprintf_s(offsetBuffer, L"0x%llX", (ULONG_PTR)callbackInfos[i].Address - moduleBase);
+            } else {
+                wcscpy_s(offsetBuffer, L"N/A");
+            }
+            ListView_SetItemText(m_hMinifilterCallbacksListView, lvi.iItem, 3, offsetBuffer);
         }
     }
+
+    CloseHandle(deviceHandle);
 
     // Update the count label
     wchar_t countBuffer[32];
     swprintf_s(countBuffer, L"Minifilter Callbacks: %d", ListView_GetItemCount(m_hMinifilterCallbacksListView));
     SetWindowText(m_hMinifilterCallbacksCountLabel, countBuffer);
-}
-
-void MainForm::UpdateSymbols() {
-    // Clear the list view
-    ListView_DeleteAllItems(m_hSymbolsListView);
-
-    // Open a handle to the driver
-    HANDLE deviceHandle = OpenDriverHandle();
-    if (deviceHandle == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    // Load kernel module symbols
-    LoadKernelModuleSymbols(deviceHandle);
-
-    CloseHandle(deviceHandle);
-
-    // Update the count label
-    wchar_t buffer[32];
-    swprintf_s(buffer, L"Symbols: %d", ListView_GetItemCount(m_hSymbolsListView));
-    SetWindowText(m_hSymbolsCountLabel, buffer);
 } 

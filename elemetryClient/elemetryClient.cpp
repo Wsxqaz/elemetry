@@ -7,16 +7,13 @@
 #include <unordered_map>
 #include <fstream>
 #include <filesystem>
-#include <DbgHelp.h>
 #include <Psapi.h>  // For EnumProcessModules, GetModuleInformation
 
-#pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "psapi.lib")  // Link against psapi.lib
 #pragma comment(lib, "comctl32.lib")
 
 #include "elemetryClient.h"
 #include "elemetry.h"
-#include "symbols.h"
 #include "utils.h"
 #include "driver.h"
 #include "enumerators.h"
@@ -24,13 +21,6 @@
 // Constants for kernel addresses, offsets, and sizes
 #define MAX_PATH_LENGTH 260
 #define MAX_CALLBACK_INFO_LENGTH 4096
-
-// Global variables for symbol enumeration callback
-PVOID g_LocalSymbolAddr = NULL;
-const char* g_TargetSymbol = NULL;
-
-// Global variables for symbol enumeration to file
-FILE* g_SymbolDumpFile = NULL;
 
 // Global variables
 HINSTANCE g_hInst;
@@ -42,19 +32,7 @@ HWND g_hWndMain;
 #define IDC_CALLBACKS_LISTVIEW 1002
 #define IDC_REGISTRY_CALLBACKS_LISTVIEW 1003
 #define IDC_MINIFILTER_CALLBACKS_LISTVIEW 1004
-#define IDC_SYMBOLS_LISTVIEW 1005
 #define IDC_REFRESH_BUTTON 2001
-#define IDC_SEARCH_BUTTON 2002
-#define IDC_SEARCH_EDIT 2003
-
-// Callback function for SymEnumSymbols
-BOOL CALLBACK SymEnumCallback(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserContext) {
-    if (strcmp(pSymInfo->Name, g_TargetSymbol) == 0) {
-        g_LocalSymbolAddr = (PVOID)pSymInfo->Address;
-        return FALSE; // Stop enumeration, we found it
-    }
-    return TRUE; // Continue enumeration
-}
 
 // Function to print module information
 void PrintModuleInfo(const MODULE_INFO& moduleInfo) {
@@ -158,84 +136,45 @@ bool GetDriverModules() {
     return true;
 }
 
-// function to call new load image ioctl
-bool LoadImageIOCTL(HANDLE  deviceHandle, const char* symbolName) {
-    if (deviceHandle == INVALID_HANDLE_VALUE) {
-        std::cerr << "Invalid device handle." << std::endl;
-        return false;
-    }
-
-    // Get the address of the symbol
-    DWORD64 symbolAddress = 0;
-    if (LookupSymbol(deviceHandle, symbolName, symbolAddress) == -1) {
-        std::cerr << "Failed to look up symbol: " << symbolName << std::endl;
-        return false;
-    }
-    std::cout << "Symbol address: 0x" << std::hex << symbolAddress << std::dec << std::endl;
-
-    const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
-    ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
-
-    std::vector<BYTE> requestBuffer(requestSize, 0);
-    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
-
-    request->Type = CallbackTableLoadImage;
-    request->TableAddress = (PVOID)symbolAddress;
-    request->MaxCallbacks = maxCallbacks;
-
-    DWORD bytesReturned = 0;
-    BOOL success= DeviceIoControl(
-        deviceHandle,
-        IOCTL_ENUMERATE_LOAD_IMAGE,
-        request, requestSize,
-        request, requestSize,
-        &bytesReturned,
-        nullptr
-    );
-
-    if (!success) {
-        std::cerr << "Failed to enumerate load image callbacks. Error code: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    std::cout << std::endl << "==== Load Image Callbacks ====" << std::endl << std::endl;
-    std::cout << "Retrieved " << request->FoundCallbacks << " callbacks from "
-              << symbolName << " at address 0x" << std::hex << symbolAddress << std::dec << std::endl;
-
-    // Print callback information
-    for (ULONG i = 0; i < request->FoundCallbacks; i++) {
-        PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
-
-        std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
-        std::cout << "    Name: " << info->CallbackName << std::endl;
-        std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
-
-        // Try to get symbol information if possible
-        char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
-        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
-        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-        pSymbol->MaxNameLen = MAX_SYM_NAME;
-
-
-        std::cout << std::endl;
-    }
-
-
-    return true;
-}
-
 // MainForm implementation
 MainForm::MainForm(HINSTANCE hInstance) {
-    g_hInst = hInstance;
+    // Initialize window handles
     m_hWnd = NULL;
     m_hStatusBar = NULL;
     m_hTabControl = NULL;
+
+    // Initialize page handles
     m_hDriverModulesPage = NULL;
     m_hCallbacksPage = NULL;
     m_hRegistryCallbacksPage = NULL;
     m_hMinifilterCallbacksPage = NULL;
-    m_hSymbolsPage = NULL;
     m_hAboutPage = NULL;
+
+    // Initialize Driver Modules page controls
+    m_hDriverModulesListView = NULL;
+    m_hDriverModulesRefreshButton = NULL;
+    m_hDriverModulesCountLabel = NULL;
+
+    // Initialize Callbacks page controls
+    m_hCallbacksListView = NULL;
+    m_hCallbacksRefreshButton = NULL;
+    m_hCallbacksCountLabel = NULL;
+
+    // Initialize Registry Callbacks page controls
+    m_hRegistryCallbacksListView = NULL;
+    m_hRegistryCallbacksRefreshButton = NULL;
+    m_hRegistryCallbacksCountLabel = NULL;
+
+    // Initialize Minifilter Callbacks page controls
+    m_hMinifilterCallbacksListView = NULL;
+    m_hMinifilterCallbacksRefreshButton = NULL;
+    m_hMinifilterCallbacksCountLabel = NULL;
+
+    // Initialize About page controls
+    m_hAboutLabel = NULL;
+
+    // Store instance handle
+    g_hInst = hInstance;
 }
 
 MainForm::~MainForm() {
@@ -272,7 +211,7 @@ bool MainForm::Create() {
         L"elemetryClient",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        900, 500,
+        900, 600,
         NULL,
         NULL,
         g_hInst,
@@ -311,45 +250,44 @@ bool MainForm::Create() {
     );
 
     // Add tabs
-    TCITEM tie = { 0 };
+    TCITEM tie;
     tie.mask = TCIF_TEXT;
 
-    wchar_t tabText[32];
-    
-    wcscpy_s(tabText, L"Driver Modules");
-    tie.pszText = tabText;
+    tie.pszText = (LPWSTR)L"Driver Modules";
     TabCtrl_InsertItem(m_hTabControl, 0, &tie);
 
-    wcscpy_s(tabText, L"Callbacks");
-    tie.pszText = tabText;
+    tie.pszText = (LPWSTR)L"Callbacks";
     TabCtrl_InsertItem(m_hTabControl, 1, &tie);
 
-    wcscpy_s(tabText, L"Registry Callbacks");
-    tie.pszText = tabText;
+    tie.pszText = (LPWSTR)L"Registry Callbacks";
     TabCtrl_InsertItem(m_hTabControl, 2, &tie);
 
-    wcscpy_s(tabText, L"Minifilter Callbacks");
-    tie.pszText = tabText;
+    tie.pszText = (LPWSTR)L"Minifilter Callbacks";
     TabCtrl_InsertItem(m_hTabControl, 3, &tie);
 
-    wcscpy_s(tabText, L"Symbols");
-    tie.pszText = tabText;
+    tie.pszText = (LPWSTR)L"About";
     TabCtrl_InsertItem(m_hTabControl, 4, &tie);
-
-    wcscpy_s(tabText, L"About");
-    tie.pszText = tabText;
-    TabCtrl_InsertItem(m_hTabControl, 5, &tie);
 
     // Create pages
     CreateDriverModulesPage();
     CreateCallbacksPage();
     CreateRegistryCallbacksPage();
     CreateMinifilterCallbacksPage();
-    CreateSymbolsPage();
     CreateAboutPage();
 
-    // Show the first page
+    // Set Driver Modules as the default tab
+    TabCtrl_SetCurSel(m_hTabControl, 0);
+
+    // Show the first page and hide others
     ShowWindow(m_hDriverModulesPage, SW_SHOW);
+    ShowWindow(m_hCallbacksPage, SW_HIDE);
+    ShowWindow(m_hRegistryCallbacksPage, SW_HIDE);
+    ShowWindow(m_hMinifilterCallbacksPage, SW_HIDE);
+    ShowWindow(m_hAboutPage, SW_HIDE);
+
+    // Update the window
+    ResizeWindow();
+    UpdateDriverModules();  // Populate the Driver Modules page immediately
 
     return true;
 }
@@ -362,7 +300,7 @@ void MainForm::Show(int nCmdShow) {
     // Show the initial tab's page and refresh button
     ShowWindow(m_hDriverModulesPage, SW_SHOW);
     ShowWindow(m_hDriverModulesRefreshButton, SW_SHOW);
-}
+    }
 
 void MainForm::Update() {
     // Update all pages
@@ -370,117 +308,159 @@ void MainForm::Update() {
     UpdateCallbacks();
     UpdateRegistryCallbacks();
     UpdateMinifilterCallbacks();
-    UpdateSymbols();
-}
+    }
 
 // Window procedure for the main window
 LRESULT CALLBACK MainForm::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_CREATE:
-        return 0;
+    {
+        // Create status bar
+        g_pMainForm->m_hStatusBar = CreateWindowEx(
+            0,
+            STATUSCLASSNAME,
+            NULL,
+            WS_CHILD | WS_VISIBLE,
+            0, 0, 0, 0,
+            hWnd,
+            NULL,
+            g_hInst,
+            NULL
+        );
+
+        // Create tab control
+        g_pMainForm->m_hTabControl = CreateWindowEx(
+            0,
+            WC_TABCONTROL,
+            NULL,
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            0, 0, 0, 0,
+            hWnd,
+            NULL,
+            g_hInst,
+            NULL
+        );
+
+        // Add tabs
+        TCITEM tie;
+        tie.mask = TCIF_TEXT;
+
+        tie.pszText = (LPWSTR)L"Driver Modules";
+        TabCtrl_InsertItem(g_pMainForm->m_hTabControl, 0, &tie);
+
+        tie.pszText = (LPWSTR)L"Callbacks";
+        TabCtrl_InsertItem(g_pMainForm->m_hTabControl, 1, &tie);
+
+        tie.pszText = (LPWSTR)L"Registry Callbacks";
+        TabCtrl_InsertItem(g_pMainForm->m_hTabControl, 2, &tie);
+
+        tie.pszText = (LPWSTR)L"Minifilter Callbacks";
+        TabCtrl_InsertItem(g_pMainForm->m_hTabControl, 3, &tie);
+
+        tie.pszText = (LPWSTR)L"About";
+        TabCtrl_InsertItem(g_pMainForm->m_hTabControl, 4, &tie);
+
+        // Create pages
+        g_pMainForm->CreateDriverModulesPage();
+        g_pMainForm->CreateCallbacksPage();
+        g_pMainForm->CreateRegistryCallbacksPage();
+        g_pMainForm->CreateMinifilterCallbacksPage();
+        g_pMainForm->CreateAboutPage();
+
+        // Show first page
+        ShowWindow(g_pMainForm->m_hDriverModulesPage, SW_SHOW);
+        ShowWindow(g_pMainForm->m_hCallbacksPage, SW_HIDE);
+        ShowWindow(g_pMainForm->m_hRegistryCallbacksPage, SW_HIDE);
+        ShowWindow(g_pMainForm->m_hMinifilterCallbacksPage, SW_HIDE);
+        ShowWindow(g_pMainForm->m_hAboutPage, SW_HIDE);
+
+        // Update the window
+        g_pMainForm->ResizeWindow();
+        g_pMainForm->Update();
+    }
+    break;
+
+    case WM_NOTIFY:
+    {
+        LPNMHDR pnmh = (LPNMHDR)lParam;
+        if (pnmh->hwndFrom == g_pMainForm->m_hTabControl && pnmh->code == TCN_SELCHANGE) {
+            // Get the selected tab
+            int iPage = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
+
+            // Hide all pages
+            ShowWindow(g_pMainForm->m_hDriverModulesPage, SW_HIDE);
+            ShowWindow(g_pMainForm->m_hCallbacksPage, SW_HIDE);
+            ShowWindow(g_pMainForm->m_hRegistryCallbacksPage, SW_HIDE);
+            ShowWindow(g_pMainForm->m_hMinifilterCallbacksPage, SW_HIDE);
+            ShowWindow(g_pMainForm->m_hAboutPage, SW_HIDE);
+
+            // Show the selected page
+            switch (iPage) {
+            case 0:
+                ShowWindow(g_pMainForm->m_hDriverModulesPage, SW_SHOW);
+            break;
+            case 1:
+                ShowWindow(g_pMainForm->m_hCallbacksPage, SW_SHOW);
+                break;
+            case 2:
+                ShowWindow(g_pMainForm->m_hRegistryCallbacksPage, SW_SHOW);
+                break;
+            case 3:
+                ShowWindow(g_pMainForm->m_hMinifilterCallbacksPage, SW_SHOW);
+                break;
+            case 4:
+                ShowWindow(g_pMainForm->m_hAboutPage, SW_SHOW);
+                break;
+            }
+        }
+    }
+    break;
+
+    case WM_COMMAND:
+    {
+        if (HIWORD(wParam) == BN_CLICKED && LOWORD(wParam) == IDC_REFRESH_BUTTON) {
+            // Get the selected tab
+            int iPage = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
+
+            // Update the selected page
+            switch (iPage) {
+            case 0:
+                g_pMainForm->UpdateDriverModules();
+                break;
+            case 1:
+                g_pMainForm->UpdateCallbacks();
+                break;
+            case 2:
+                g_pMainForm->UpdateRegistryCallbacks();
+                break;
+            case 3:
+                g_pMainForm->UpdateMinifilterCallbacks();
+                break;
+        }
+    }
+    }
+    break;
 
     case WM_SIZE:
         g_pMainForm->ResizeWindow();
-        return 0;
+        break;
 
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDC_REFRESH_BUTTON) {
-            // Get the current tab
-            int iTab = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
-            
-            // Update the appropriate page based on the current tab
-            switch (iTab) {
-                case 0: // Driver Modules
-                    g_pMainForm->UpdateDriverModules();
-                    break;
-                case 1: // Callbacks
-                    g_pMainForm->UpdateCallbacks();
-                    break;
-                case 2: // Registry Callbacks
-                    g_pMainForm->UpdateRegistryCallbacks();
-                    break;
-                case 3: // Minifilter Callbacks
-                    g_pMainForm->UpdateMinifilterCallbacks();
-                    break;
-                case 4: // Symbols
-                    g_pMainForm->UpdateSymbols();
-                    break;
-            }
-            return 0;
-        }
-        return 0;
-
-    case WM_NOTIFY:
-        if (((LPNMHDR)lParam)->code == TCN_SELCHANGE) {
-            int iTab = TabCtrl_GetCurSel(g_pMainForm->m_hTabControl);
-            
-            // Show/hide pages
-            ShowWindow(g_pMainForm->m_hDriverModulesPage, (iTab == 0) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hCallbacksPage, (iTab == 1) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hRegistryCallbacksPage, (iTab == 2) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hMinifilterCallbacksPage, (iTab == 3) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hSymbolsPage, (iTab == 4) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hAboutPage, (iTab == 5) ? SW_SHOW : SW_HIDE);
-            
-            // Show/hide refresh buttons
-            ShowWindow(g_pMainForm->m_hDriverModulesRefreshButton, (iTab == 0) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hCallbacksRefreshButton, (iTab == 1) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hRegistryCallbacksRefreshButton, (iTab == 2) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hMinifilterCallbacksRefreshButton, (iTab == 3) ? SW_SHOW : SW_HIDE);
-            ShowWindow(g_pMainForm->m_hSymbolsRefreshButton, (iTab == 4) ? SW_SHOW : SW_HIDE);
-
-            // Position the refresh button for the current tab
-            HWND currentPage = NULL;
-            HWND currentButton = NULL;
-            int x = 10;
-            int y = 420;
-            switch (iTab) {
-                case 0:
-                    currentPage = g_pMainForm->m_hDriverModulesPage;
-                    currentButton = g_pMainForm->m_hDriverModulesRefreshButton;
-                    x = 10; y = 420;
-                    break;
-                case 1:
-                    currentPage = g_pMainForm->m_hCallbacksPage;
-                    currentButton = g_pMainForm->m_hCallbacksRefreshButton;
-                    x = 10; y = 420;
-                    break;
-                case 2:
-                    currentPage = g_pMainForm->m_hRegistryCallbacksPage;
-                    currentButton = g_pMainForm->m_hRegistryCallbacksRefreshButton;
-                    x = 10; y = 420;
-                    break;
-                case 3:
-                    currentPage = g_pMainForm->m_hMinifilterCallbacksPage;
-                    currentButton = g_pMainForm->m_hMinifilterCallbacksRefreshButton;
-                    x = 10; y = 420;
-                    break;
-                case 4:
-                    currentPage = g_pMainForm->m_hSymbolsPage;
-                    currentButton = g_pMainForm->m_hSymbolsRefreshButton;
-                    x = 330; y = 420;
-                    break;
-            }
-
-            if (currentPage && currentButton) {
-                RECT pageRect;
-                GetWindowRect(currentPage, &pageRect);
-                MapWindowPoints(HWND_DESKTOP, hWnd, (LPPOINT)&pageRect, 2);
-                SetWindowPos(currentButton, NULL,
-                    pageRect.left + x, pageRect.top + y,
-                    100, 30,
-                    SWP_NOZORDER);
-            }
-        }
-        return 0;
+    case WM_GETMINMAXINFO:
+    {
+        LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+        lpMMI->ptMinTrackSize.x = 900;  // Minimum width
+        lpMMI->ptMinTrackSize.y = 600;  // Minimum height increased from 500 to 600
+        break;
+    }
 
     case WM_DESTROY:
         PostQuitMessage(0);
-        return 0;
+        break;
 
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
+    return 0;
 }
 
 // Main function
