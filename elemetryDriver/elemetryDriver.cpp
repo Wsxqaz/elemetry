@@ -155,6 +155,10 @@ NTSTATUS DispatchDeviceControl(
             status = HandleEnumerateCallbacksIOCTL(Irp, stack);
             break;
 
+        case IOCTL_ENUMERATE_LOAD_IMAGE:
+            status = HandleEnumerateLoadImageCallbacksIOCTL(Irp, stack);
+            break;
+
         default:
             DbgPrint("[elemetry] Unknown IOCTL code: 0x%X\n", controlCode);
             Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;

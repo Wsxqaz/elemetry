@@ -515,6 +515,166 @@ bool LoadKernelModuleSymbols(HANDLE deviceHandle) {
     return modulesLoaded > 0;
 }
 
+
+size_t LookupSymbol(HANDLE deviceHandle, const char* symbolName, DWORD64& address) {
+      // Initialize symbols
+    HANDLE hProcess = GetCurrentProcess();
+
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_DEBUG);
+
+    if (!SymInitialize(hProcess, DEFAULT_SYMBOL_PATH, FALSE)) {
+        std::cerr << "Failed to initialize symbols. Error code: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    // Get ntoskrnl.exe base address
+        const DWORD bufferSize = sizeof(MODULE_INFO) * CLIENT_MAX_MODULES;
+    std::vector<BYTE> buffer(bufferSize, 0);
+    PMODULE_INFO moduleInfos = reinterpret_cast<PMODULE_INFO>(buffer.data());
+
+    DWORD bytesReturned = 0;
+    BOOL success = DeviceIoControl(
+        deviceHandle,
+        IOCTL_GET_MODULES,
+        NULL, 0,
+        moduleInfos, bufferSize,
+        &bytesReturned,
+        NULL
+    );
+
+    if (!success) {
+        std::cerr << "Failed to get modules. Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return -1;
+    }
+
+    DWORD moduleCount = bytesReturned / sizeof(MODULE_INFO);
+    PVOID ntosAddr = NULL;
+
+    // Find ntoskrnl.exe
+    for (DWORD i = 0; i < moduleCount; i++) {
+        std::wstring path = moduleInfos[i].Path;
+        std::transform(path.begin(), path.end(), path.begin(), ::towlower);
+
+        if (path.find(L"ntoskrnl.exe") != std::wstring::npos ||
+            path.find(L"ntkrnlmp.exe") != std::wstring::npos ||
+            path.find(L"ntkrnlpa.exe") != std::wstring::npos) {
+            ntosAddr = moduleInfos[i].BaseAddress;
+            std::wcout << L"Found ntoskrnl at: 0x" << std::hex << ntosAddr << std::dec << std::endl;
+            break;
+        }
+    }
+
+    if (!ntosAddr) {
+        std::cerr << "Failed to find ntoskrnl.exe module" << std::endl;
+        SymCleanup(hProcess);
+        return -1;
+    }
+
+    // Get path to ntoskrnl.exe
+    std::string ntoskrnlPath = GetNtoskrnlPath();
+    if (ntoskrnlPath.empty()) {
+        std::cerr << "Warning: Could not find ntoskrnl.exe in current directory or System32. Using default name." << std::endl;
+        ntoskrnlPath = "ntoskrnl.exe";
+    } else {
+        std::cout << "Using ntoskrnl.exe from: " << ntoskrnlPath << std::endl;
+    }
+
+    // Load ntoskrnl symbols
+    DWORD64 baseAddr = SymLoadModuleEx(hProcess, NULL, ntoskrnlPath.c_str(), NULL, (DWORD64)ntosAddr, 0, NULL, 0);
+    if (baseAddr == 0 && GetLastError() != ERROR_SUCCESS) {
+        std::cerr << "Failed to load symbols for ntoskrnl.exe. Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return -1;
+    }
+
+    // Look up the callback table symbol
+    SYMBOL_INFO_PACKAGE symbolInfo = { 0 };
+    symbolInfo.si.SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbolInfo.si.MaxNameLen = MAX_SYM_NAME;
+
+    if (!SymFromName(hProcess, symbolName, &symbolInfo.si)) {
+        std::cerr << "Failed to find symbol: " << symbolName << ". Error code: " << GetLastError() << std::endl;
+        SymCleanup(hProcess);
+        return -1;
+    }
+
+    std::cout << "Found symbol " << symbolName << " at address: 0x"
+              << std::hex << symbolInfo.si.Address << std::dec << std::endl;
+
+    // write symbol address to output parameter
+    address = symbolInfo.si.Address;
+
+    return symbolInfo.si.Address;
+}
+
+// function to call new load image ioctl
+bool LoadImageIOCTL(HANDLE  deviceHandle, const char* symbolName) {
+    if (deviceHandle == INVALID_HANDLE_VALUE) {
+        std::cerr << "Invalid device handle." << std::endl;
+        return false;
+    }
+
+    // Get the address of the symbol
+    DWORD64 symbolAddress = 0;
+    if (LookupSymbol(deviceHandle, symbolName, symbolAddress) == -1) {
+        std::cerr << "Failed to look up symbol: " << symbolName << std::endl;
+        return false;
+    }
+    std::cout << "Symbol address: 0x" << std::hex << symbolAddress << std::dec << std::endl;
+
+    const ULONG maxCallbacks = 64; // Reasonable limit for kernel callbacks
+    ULONG requestSize = sizeof(CALLBACK_ENUM_REQUEST) + (maxCallbacks - 1) * sizeof(CALLBACK_INFO_SHARED);
+
+    std::vector<BYTE> requestBuffer(requestSize, 0);
+    PCALLBACK_ENUM_REQUEST request = reinterpret_cast<PCALLBACK_ENUM_REQUEST>(requestBuffer.data());
+
+    request->Type = CallbackTableLoadImage;
+    request->TableAddress = (PVOID)symbolAddress;
+    request->MaxCallbacks = maxCallbacks;
+
+    DWORD bytesReturned = 0;
+    BOOL success= DeviceIoControl(
+        deviceHandle,
+        IOCTL_ENUMERATE_LOAD_IMAGE,
+        request, requestSize,
+        request, requestSize,
+        &bytesReturned,
+        nullptr
+    );
+
+    if (!success) {
+        std::cerr << "Failed to enumerate load image callbacks. Error code: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    std::cout << std::endl << "==== Load Image Callbacks ====" << std::endl << std::endl;
+    std::cout << "Retrieved " << request->FoundCallbacks << " callbacks from "
+              << symbolName << " at address 0x" << std::hex << symbolAddress << std::dec << std::endl;
+
+    // Print callback information
+    for (ULONG i = 0; i < request->FoundCallbacks; i++) {
+        PCALLBACK_INFO_SHARED info = &request->Callbacks[i];
+
+        std::cout << "[" << i << "] Callback in " << info->ModuleName << std::endl;
+        std::cout << "    Name: " << info->CallbackName << std::endl;
+        std::cout << "    Address: 0x" << std::hex << info->Address << std::dec << std::endl;
+
+        // Try to get symbol information if possible
+        char symbolBuffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 };
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)symbolBuffer;
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = MAX_SYM_NAME;
+
+
+        std::cout << std::endl;
+    }
+
+
+    return true;
+}
+
+
 // Function to enumerate callbacks with symbol lookup
 bool EnumerateCallbacksWithSymbolTable(HANDLE deviceHandle, CALLBACK_TABLE_TYPE tableType, const char* symbolName) {
     if (deviceHandle == INVALID_HANDLE_VALUE) {
@@ -861,6 +1021,7 @@ int main() {
         std::cout << "4. Enumerate thread creation callbacks (PspCreateThreadNotifyRoutine)" << std::endl;
         std::cout << "5. Enumerate registry callbacks (CmCallbackListHead)" << std::endl;
         std::cout << "6. Enumerate minifilter callbacks" << std::endl;
+        std::cout << "7. LoadImageIOCTL (test)" << std::endl;
         std::cout << "0. Exit" << std::endl;
         std::cout << std::endl;
         std::cout << "Select an operation (0-6): ";
@@ -901,6 +1062,11 @@ int main() {
             case 6:
                 std::cout << std::endl << "Enumerating minifilter callbacks..." << std::endl;
                 GetDriverMinifilterCallbacks();
+                break;
+
+            case 7:
+                std::cout << std::endl << "LoadImageIOCTL..." << std::endl;
+                LoadImageIOCTL(deviceHandle, SYMBOL_LOAD_IMAGE_CALLBACKS);
                 break;
 
             default:

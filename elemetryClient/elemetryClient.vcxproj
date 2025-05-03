@@ -98,7 +98,7 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)include\10.0.22621.0\um;$(WindowsSdkDir)include\10.0.22621.0\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(WindowsSdkDir)include\10.0.22621.0\um;$(WindowsSdkDir)include\10.0.22621.0\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -115,7 +115,7 @@
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(WindowsSdkDir)include\10.0.22621.0\um;$(WindowsSdkDir)include\10.0.22621.0\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(WindowsSdkDir)include\10.0.22621.0\um;$(WindowsSdkDir)include\10.0.22621.0\shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -164,9 +164,15 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="elemetryClient.cpp" />
+    <ClCompile Include="utils\utils.cpp" />
+    <ClCompile Include="symbols\symbols.cpp" />
+    <ClCompile Include="callbacks\callbacks.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="elemetry.h" />
+    <ClInclude Include="utils\utils.h" />
+    <ClInclude Include="symbols\symbols.h" />
+    <ClInclude Include="callbacks\callbacks.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
