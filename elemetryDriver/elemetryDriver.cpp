@@ -135,10 +135,10 @@ NTSTATUS DispatchDeviceControl(
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
                 return STATUS_CANCELLED;
             }
-            
+
             IoSetCancelRoutine(Irp, CancelDispatchRoutine);
             IoReleaseCancelSpinLock(oldIrql);
-            
+
             DbgPrint("[elemetry] Set cancel routine for registry callback enumeration\n");
         }
     }
@@ -151,12 +151,12 @@ NTSTATUS DispatchDeviceControl(
             status = HandleGetModulesIOCTL(Irp, stack);
             break;
 
-        case IOCTL_GET_CALLBACKS:
+        case IOCTL_ENUM_CALLBACKS:
             status = HandleEnumerateCallbacksIOCTL(Irp, stack);
             break;
 
-        case IOCTL_ENUM_CALLBACKS:
-            status = HandleEnumerateCallbacksIOCTL(Irp, stack);
+        case IOCTL_ENUMERATE_LOAD_IMAGE:
+            status = HandleEnumerateLoadImageCallbacksIOCTL(Irp, stack);
             break;
 
         default:
@@ -193,13 +193,6 @@ NTSTATUS DriverEntry(
     UNREFERENCED_PARAMETER(RegistryPath);
 
     DbgPrint("[elemetry] DriverEntry: Starting initialization\n");
-
-    // Initialize callback tracking
-    status = InitializeCallbackTracking();
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("[elemetry] DriverEntry: Failed to initialize callback tracking: 0x%X\n", status);
-        return status;
-    }
 
     // Set up driver object
     DriverObject->DriverUnload = DriverUnload;
@@ -250,10 +243,6 @@ VOID DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
     DbgPrint("[elemetry] Driver unloading...\n");
-
-    // First, clean up callback tracking
-    CleanupCallbackTracking();
-    DbgPrint("[elemetry] Cleaned up callback tracking\n");
 
     // Delete symbolic link
     UNICODE_STRING symbolicLinkName;
