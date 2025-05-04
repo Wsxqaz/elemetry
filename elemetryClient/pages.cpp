@@ -366,8 +366,7 @@ void MainForm::CreateAboutPage() {
         L"STATIC",
         L"elemetryClient v1.0\n\n"
         L"A tool for enumerating driver modules and callbacks\n\n"
-        L"Created by [Your Name]\n"
-        L"GitHub: [Your GitHub]",
+        L"GitHub: wsxqaz",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         0, 0, 0, 0,
         m_hAboutPage,
@@ -861,4 +860,4 @@ void MainForm::UpdateMinifilterCallbacks() {
     wchar_t countBuffer[32];
     swprintf_s(countBuffer, L"Minifilter Callbacks: %d", ListView_GetItemCount(m_hMinifilterCallbacksListView));
     SetWindowText(m_hMinifilterCallbacksCountLabel, countBuffer);
-} 
+}
